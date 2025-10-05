@@ -54,10 +54,10 @@ export function getSubscriptionPlan(
 	nextTrialOptInDate?: string,
 ): SubscriptionPlan {
 	return {
-		id: id,
+		id: 'pro',
 		name: getSubscriptionProductPlanName(id),
-		bundle: bundle,
-		cancelled: cancelled,
+		bundle: false,
+		cancelled: false,
 		organizationId: organizationId,
 		trialReactivationCount: trialReactivationCount,
 		nextTrialOptInDate: nextTrialOptInDate,
