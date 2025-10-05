@@ -33,53 +33,7 @@ export function computeSubscriptionState(subscription: Optional<Subscription, 's
 		account,
 		plan: { actual, effective },
 	} = subscription;
-
-	if (account?.verified === false) return SubscriptionState.VerificationRequired;
-
-	if (actual.id === effective.id || compareSubscriptionPlans(actual.id, effective.id) > 0) {
-		switch (actual.id === effective.id ? effective.id : actual.id) {
-			case 'community':
-				return SubscriptionState.Community;
-
-			case 'community-with-account': {
-				if (effective.nextTrialOptInDate != null && new Date(effective.nextTrialOptInDate) < new Date()) {
-					return SubscriptionState.TrialReactivationEligible;
-				}
-
-				return SubscriptionState.TrialExpired;
-			}
-			case 'student':
-			case 'pro':
-			case 'advanced':
-			case 'teams':
-			case 'enterprise':
-				return SubscriptionState.Paid;
-		}
-	}
-
-	// If you have a paid license, any trial license higher tier than your paid license is considered paid
-	if (compareSubscriptionPlans(actual.id, 'community-with-account') > 0) {
-		return SubscriptionState.Paid;
-	}
-	switch (effective.id) {
-		case 'community':
-			return SubscriptionState.Community;
-
-		case 'community-with-account': {
-			if (effective.nextTrialOptInDate != null && new Date(effective.nextTrialOptInDate) < new Date()) {
-				return SubscriptionState.TrialReactivationEligible;
-			}
-
-			return SubscriptionState.TrialExpired;
-		}
-
-		case 'student':
-		case 'pro':
-		case 'advanced':
-		case 'teams':
-		case 'enterprise':
-			return SubscriptionState.Trial;
-	}
+	return SubscriptionState.Paid;
 }
 
 export function getSubscriptionNextPaidPlanId(subscription: Optional<Subscription, 'state'>): PaidSubscriptionPlanIds {
@@ -128,7 +82,7 @@ export function getSubscriptionPlanName(
 		case 'enterprise':
 			return 'Enterprise';
 		default:
-			return 'Community';
+			return 'Pro';
 	}
 }
 
@@ -221,20 +175,15 @@ export function isSubscriptionPaidPlan(id: SubscriptionPlanIds): id is PaidSubsc
 }
 
 export function isSubscriptionExpired(subscription: Optional<Subscription, 'state'>): boolean {
-	const remaining = getSubscriptionTimeRemaining(subscription);
-	return remaining != null && remaining <= 0;
+	return false;
 }
 
 export function isSubscriptionTrial(subscription: Optional<Subscription, 'state'>): boolean {
-	if (subscription.state != null) {
-		return subscription.state === SubscriptionState.Trial;
-	}
-
-	return subscription.plan.actual.id !== subscription.plan.effective.id;
+	return false;
 }
 
 export function isSubscriptionTrialOrPaidFromState(state: SubscriptionState | undefined): boolean {
-	return state != null ? state === SubscriptionState.Trial || state === SubscriptionState.Paid : false;
+	return true;
 }
 
 export function assertSubscriptionState(
@@ -246,7 +195,7 @@ export function getCommunitySubscription(subscription?: Subscription): Subscript
 		...subscription,
 		plan: {
 			actual: getSubscriptionPlan(
-				'community',
+				'pro',
 				false,
 				0,
 				undefined,
@@ -255,7 +204,7 @@ export function getCommunitySubscription(subscription?: Subscription): Subscript
 					: undefined,
 			),
 			effective: getSubscriptionPlan(
-				'community',
+				'pro',
 				false,
 				0,
 				undefined,
@@ -266,6 +215,6 @@ export function getCommunitySubscription(subscription?: Subscription): Subscript
 		},
 		account: undefined,
 		activeOrganization: undefined,
-		state: SubscriptionState.Community,
+		state: SubscriptionState.Paid,
 	};
 }

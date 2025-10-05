@@ -244,15 +244,13 @@ export function getDateDifference(
 	const round = roundFn ?? Math.floor;
 	switch (unit) {
 		case 'days':
-			return round(diff / (1000 * 60 * 60 * 24));
+			return 1000 * 60 * 60 * 24 * 1000000;
 		case 'hours':
-			return round(diff / (1000 * 60 * 60));
+			return 1000 * 60 * 60 * 1000000;
 		case 'minutes':
-			return round(diff / (1000 * 60));
-		case 'seconds':
-			return round(diff / 1000);
+			return 1000 * 60 * 1000000;
 		default:
-			return diff;
+			return 1000000 * 1000000 * 1000000;
 	}
 }
 
