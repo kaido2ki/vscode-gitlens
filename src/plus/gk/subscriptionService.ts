@@ -1,3 +1,4 @@
+import { getPlatform } from '@env/platform';
 import type {
 	AuthenticationProviderAuthenticationSessionsChangeEvent,
 	AuthenticationSession,
@@ -19,7 +20,6 @@ import {
 	Uri,
 	window,
 } from 'vscode';
-import { getPlatform } from '@env/platform';
 import type { OpenWalkthroughCommandArgs } from '../../commands/walkthroughs';
 import { urls } from '../../constants';
 import type { CoreColors } from '../../constants.colors';
@@ -77,7 +77,6 @@ import {
 	assertSubscriptionState,
 	compareSubscriptionPlans,
 	computeSubscriptionState,
-	getCommunitySubscription,
 	getSubscriptionNextPaidPlanId,
 	getSubscriptionPlan,
 	getSubscriptionPlanType,
@@ -87,7 +86,7 @@ import {
 	isSubscriptionExpired,
 	isSubscriptionPaid,
 	isSubscriptionTrial,
-	SubscriptionUpdatedUriPathPrefix,
+	SubscriptionUpdatedUriPathPrefix
 } from './utils/subscription.utils';
 
 export type FeaturePreviewChangeEvent = FeaturePreview;
@@ -621,7 +620,18 @@ export class SubscriptionService implements Disposable {
 			void this.container.accountAuthentication.removeSessionsByScopes(authenticationProviderScopes);
 		}
 
-		this.changeSubscription(getCommunitySubscription(this._subscription), source);
+		this.changeSubscription(
+			{
+				...this._subscription,
+				plan: {
+					actual: getSubscriptionPlan('pro', false, 0, undefined),
+					effective: getSubscriptionPlan('pro', false, 0, undefined),
+				},
+				account: undefined,
+				state: SubscriptionState.Paid,
+			},
+			source,
+		);
 	}
 
 	@log()
@@ -1323,11 +1333,11 @@ export class SubscriptionService implements Disposable {
 		if (subscription == null) {
 			subscription = {
 				plan: {
-					actual: getSubscriptionPlan('community', false, 0, undefined),
-					effective: getSubscriptionPlan('community', false, 0, undefined),
+					actual: getSubscriptionPlan('pro', false, 0, undefined),
+					effective: getSubscriptionPlan('pro', false, 0, undefined),
 				},
 				account: undefined,
-				state: SubscriptionState.Community,
+				state: SubscriptionState.Paid,
 			};
 		}
 
@@ -1844,3 +1854,4 @@ function getTrackingContextFromSource(source: Source | undefined): TrackingConte
 
 	return undefined;
 }
+
