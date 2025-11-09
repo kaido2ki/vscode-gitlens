@@ -81,6 +81,11 @@ export class SearchAndCompareViewNode extends ViewNode<'search-compare', SearchA
 		const children = [...this.children];
 		if (children.includes(results)) return;
 
+		const index = children.findIndex(c => c.id === results.id);
+		if (index !== -1) {
+			children.splice(index, 1);
+		}
+
 		children.push(results);
 		this.children = children;
 
@@ -156,7 +161,7 @@ export class SearchAndCompareViewNode extends ViewNode<'search-compare', SearchA
 				`Compare ${this.getRefName(selectedRef.ref)} with`,
 				'Choose a reference (branch, tag, etc) to compare with',
 				{
-					allowRevisions: true,
+					allowedAdditionalInput: { rev: true },
 					picked: typeof selectedRef.ref === 'string' ? selectedRef.ref : selectedRef.ref.ref,
 					// checkmarks: true,
 					include: ReferencesQuickPickIncludes.BranchesAndTags | ReferencesQuickPickIncludes.HEAD,
@@ -197,7 +202,7 @@ export class SearchAndCompareViewNode extends ViewNode<'search-compare', SearchA
 				'Compare',
 				'Choose a reference (branch, tag, etc) to compare',
 				{
-					allowRevisions: { ranges: true },
+					allowedAdditionalInput: { range: true, rev: true },
 					include: ReferencesQuickPickIncludes.All,
 					sort: { branches: { current: true }, tags: {} },
 				},

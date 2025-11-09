@@ -49,7 +49,7 @@ export class RepositoryNode extends SubscribeableViewNode<'repository', ViewsWit
 	) {
 		super('repository', uri, view, parent);
 
-		this.updateContext({ ...context, repository: this.repo });
+		this.updateContext({ ...context, repository: repo });
 		this._uniqueId = getViewNodeId(this.type, this.context);
 
 		this._status = this.repo.git.status.getStatus();
@@ -96,7 +96,7 @@ export class RepositoryNode extends SubscribeableViewNode<'repository', ViewsWit
 					status.rebasing,
 				);
 
-				const pausedOpStatus = await this.repo.git.status.getPausedOperationStatus?.();
+				const pausedOpStatus = await this.repo.git.pausedOps?.getPausedOperationStatus?.();
 				if (pausedOpStatus != null) {
 					children.push(new PausedOperationStatusNode(this.view, this, branch, pausedOpStatus, true, status));
 				} else if (this.view.config.showUpstreamStatus) {

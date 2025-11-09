@@ -1,7 +1,6 @@
 /* eslint-disable @typescript-eslint/no-restricted-imports -- TODO need to deal with sharing rich class shapes to webviews */
 import type { Uri, WorkspaceFolder } from 'vscode';
 import { workspace } from 'vscode';
-import { Schemes } from '../../constants';
 import type { Container } from '../../container';
 import { relative } from '../../system/-webview/path';
 import { getWorkspaceFriendlyPath } from '../../system/-webview/vscode/workspaces';
@@ -9,6 +8,7 @@ import { formatDate, fromNow } from '../../system/date';
 import { memoize } from '../../system/decorators/memoize';
 import { getLoggableName } from '../../system/logger';
 import { normalizePath } from '../../system/path';
+import { getRepositoryOrWorktreePath } from '../utils/-webview/repository.utils';
 import { shortenRevision } from '../utils/revision.utils';
 import type { GitBranch } from './branch';
 import type { GitStatus } from './status';
@@ -35,7 +35,7 @@ export class GitWorktree {
 	}
 
 	get path(): string {
-		return this.uri.scheme === Schemes.File ? normalizePath(this.uri.fsPath) : this.uri.toString();
+		return getRepositoryOrWorktreePath(this.uri);
 	}
 
 	@memoize()
@@ -53,8 +53,9 @@ export class GitWorktree {
 			: this.formatDateFromNow();
 	}
 
+	private _hasWorkingChanges: boolean | undefined;
 	get hasChanges(): boolean | undefined {
-		return this._status?.hasChanges;
+		return this._hasWorkingChanges;
 	}
 
 	get opened(): boolean {
@@ -86,7 +87,6 @@ export class GitWorktree {
 		return this.date != null ? fromNow(this.date) : '';
 	}
 
-	private _status: GitStatus | undefined;
 	private _statusPromise: Promise<GitStatus | undefined> | undefined;
 	async getStatus(options?: { force?: boolean }): Promise<GitStatus | undefined> {
 		if (this.type === 'bare') return Promise.resolve(undefined);
@@ -96,7 +96,9 @@ export class GitWorktree {
 			this._statusPromise = new Promise(async (resolve, reject) => {
 				try {
 					const status = await this.container.git.getRepositoryService(this.uri.fsPath).status.getStatus();
-					this._status = status;
+					if (status != null) {
+						this._hasWorkingChanges = status.hasChanges;
+					}
 					resolve(status);
 				} catch (ex) {
 					// eslint-disable-next-line @typescript-eslint/prefer-promise-reject-errors
@@ -105,6 +107,27 @@ export class GitWorktree {
 			});
 		}
 		return this._statusPromise;
+	}
+
+	private _hasWorkingChangesPromise: Promise<boolean | undefined> | undefined;
+	async hasWorkingChanges(options?: {
+		force?: boolean;
+		staged?: boolean;
+		unstaged?: boolean;
+		untracked?: boolean;
+	}): Promise<boolean | undefined> {
+		if (this.type === 'bare') return Promise.resolve(undefined);
+
+		if (this._hasWorkingChangesPromise == null || options?.force) {
+			this._hasWorkingChangesPromise = this.container.git
+				.getRepositoryService(this.uri.fsPath)
+				.status?.hasWorkingChanges({
+					staged: options?.staged,
+					unstaged: options?.unstaged,
+					untracked: options?.untracked,
+				});
+		}
+		return this._hasWorkingChangesPromise;
 	}
 }
 

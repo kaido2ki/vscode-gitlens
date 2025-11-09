@@ -25,11 +25,12 @@ import type { GitWorktree } from '../../../../git/models/worktree';
 import {
 	getGraphParser,
 	getShaAndDatesLogParser,
+	getShaAndDatesWithFilesLogParser,
 	getShaAndStatsLogParser,
 	getShaLogParser,
 } from '../../../../git/parsers/logParser';
 import type { GitGraphSearch, GitGraphSearchResultData, GitGraphSearchResults } from '../../../../git/search';
-import { getSearchQueryComparisonKey, parseSearchQueryCommand } from '../../../../git/search';
+import { getSearchQueryComparisonKey, parseSearchQueryGitCommand } from '../../../../git/search';
 import { isBranchStarred } from '../../../../git/utils/-webview/branch.utils';
 import { getRemoteIconUri } from '../../../../git/utils/-webview/icons';
 import { groupWorktreesByBranch } from '../../../../git/utils/-webview/worktree.utils';
@@ -40,7 +41,7 @@ import {
 } from '../../../../git/utils/branch.utils';
 import { getChangedFilesCount } from '../../../../git/utils/commit.utils';
 import { createReference } from '../../../../git/utils/reference.utils';
-import { isUncommittedStaged } from '../../../../git/utils/revision.utils';
+import { isUncommitted } from '../../../../git/utils/revision.utils';
 import { getTagId } from '../../../../git/utils/tag.utils';
 import { isUserMatch } from '../../../../git/utils/user.utils';
 import { getWorktreeId } from '../../../../git/utils/worktree.utils';
@@ -94,14 +95,16 @@ export class GraphGitSubProvider implements GitGraphSubProvider {
 
 		const [shaResult, stashResult, branchesResult, remotesResult, currentUserResult, worktreesResult] =
 			await Promise.allSettled([
-				this.git.exec(
-					{ cwd: repoPath, configs: gitConfigsLog },
-					'log',
-					...shaParser.arguments,
-					'-n1',
-					rev && !isUncommittedStaged(rev) ? rev : 'HEAD',
-					'--',
-				),
+				!isUncommitted(rev, true)
+					? this.git.exec(
+							{ cwd: repoPath, configs: gitConfigsLog },
+							'log',
+							...shaParser.arguments,
+							'-n1',
+							rev ?? 'HEAD',
+							'--',
+						)
+					: undefined,
 				this.provider.stash?.getStash(repoPath, undefined, cancellation),
 				this.provider.branches.getBranches(repoPath, undefined, cancellation),
 				this.provider.remotes.getRemotes(repoPath, undefined, cancellation),
@@ -131,7 +134,8 @@ export class GraphGitSubProvider implements GitGraphSubProvider {
 
 		const remotes = getSettledValue(remotesResult);
 		const remoteMap = remotes != null ? new Map(remotes.map(r => [r.name, r])) : new Map<string, GitRemote>();
-		const selectSha = first(shaParser.parse(getSettledValue(shaResult)?.stdout));
+		const shas = getSettledValue(shaResult)?.stdout;
+		const selectSha = shas != null ? first(shaParser.parse(shas)) : undefined;
 
 		const downstreamMap = new Map<string, string[]>();
 
@@ -356,7 +360,9 @@ export class GraphGitSubProvider implements GitGraphSubProvider {
 										: branchIdOfMainWorktree === branchId
 											? '+checkedout'
 											: ''
-								}${branch?.starred ? '+starred' : ''}`,
+								}${branch?.starred ? '+starred' : ''}${branch?.upstream?.state.ahead ? '+ahead' : ''}${
+									branch?.upstream?.state.behind ? '+behind' : ''
+								}`,
 								webviewItemValue: {
 									type: 'branch',
 									ref: createReference(tip, repoPath, {
@@ -589,7 +595,7 @@ export class GraphGitSubProvider implements GitGraphSubProvider {
 					worktrees: worktrees,
 					worktreesByBranch: worktreesByBranch,
 					rows: rows,
-					id: sha,
+					id: sha ?? rev,
 					rowsStats: rowStats,
 					rowsStatsDeferred: rowsStatsDeferred,
 					paging: {
@@ -634,22 +640,24 @@ export class GraphGitSubProvider implements GitGraphSubProvider {
 
 		const comparisonKey = getSearchQueryComparisonKey(search);
 		try {
-			const parser = getShaAndDatesLogParser();
-
-			const similarityThreshold = configuration.get('advanced.similarityThreshold');
-			const args = [
-				'log',
-
-				...parser.arguments,
-				`-M${similarityThreshold == null ? '' : `${similarityThreshold}%`}`,
-				'--use-mailmap',
-			];
-
 			const currentUser = search.query.includes('@me')
 				? await this.provider.config.getCurrentUser(repoPath)
 				: undefined;
 
-			const { args: searchArgs, files, shas, filters } = parseSearchQueryCommand(search, currentUser);
+			const { args: searchArgs, files, shas, filters } = parseSearchQueryGitCommand(search, currentUser);
+
+			const tipsOnly = filters.type === 'tip';
+			const parser = filters.files
+				? getShaAndDatesWithFilesLogParser(tipsOnly)
+				: getShaAndDatesLogParser(tipsOnly);
+
+			const similarityThreshold = configuration.get('advanced.similarityThreshold');
+			const args = [
+				'log',
+				...parser.arguments,
+				`-M${similarityThreshold == null ? '' : `${similarityThreshold}%`}`,
+				'--use-mailmap',
+			];
 
 			let stashes: Map<string, GitStashCommit> | undefined;
 			let stdin: string | undefined;
@@ -660,11 +668,14 @@ export class GraphGitSubProvider implements GitGraphSubProvider {
 				args.push('--no-walk');
 
 				remappedIds = new Map();
-			} else {
+			} else if (!filters.refs) {
+				// Don't include stashes when using ref: filter, as they would add unrelated commits
 				// TODO@eamodio this is insanity -- there *HAS* to be a better way to get git log to return stashes
 				({ stdin, stashes, remappedIds } = convertStashesToStdin(
 					await this.provider.stash?.getStash(repoPath, undefined, cancellation),
 				));
+			} else {
+				remappedIds = new Map();
 			}
 
 			if (stdin) {
@@ -730,13 +741,14 @@ export class GraphGitSubProvider implements GitGraphSubProvider {
 
 						count++;
 						sha = remappedIds.get(r.sha) ?? r.sha;
-						if (results.has(sha) || (stashesOnly && !stashes?.has(sha))) {
+						if (results.has(sha) || (stashesOnly && !stashes?.has(sha)) || (tipsOnly && !r.tips)) {
 							continue;
 						}
 
 						results.set(sha, {
 							i: results.size,
 							date: Number(options?.ordering === 'author-date' ? r.authorDate : r.committerDate) * 1000,
+							files: r.files,
 						});
 					}
 
@@ -747,6 +759,7 @@ export class GraphGitSubProvider implements GitGraphSubProvider {
 					return {
 						repoPath: repoPath,
 						query: search,
+						queryFilters: filters,
 						comparisonKey: comparisonKey,
 						results: results,
 						paging: limit ? { limit: limit, hasMore: hasMore } : undefined,
@@ -755,7 +768,13 @@ export class GraphGitSubProvider implements GitGraphSubProvider {
 					};
 				} catch (ex) {
 					if (isCancellationError(ex) || cancellation?.isCancellationRequested) {
-						return { repoPath: repoPath, query: search, comparisonKey: comparisonKey, results: results };
+						return {
+							repoPath: repoPath,
+							query: search,
+							queryFilters: filters,
+							comparisonKey: comparisonKey,
+							results: results,
+						};
 					}
 
 					throw new GitSearchError(ex);

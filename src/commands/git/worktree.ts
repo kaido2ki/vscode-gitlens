@@ -887,12 +887,12 @@ export class WorktreeGitCommand extends QuickCommand<State> {
 
 					try {
 						if (force) {
-							let status;
+							let hasChanges;
 							try {
-								status = await worktree?.getStatus();
+								hasChanges = await worktree?.hasWorkingChanges();
 							} catch {}
 
-							if ((status?.hasChanges ?? false) && !skipHasChangesPrompt) {
+							if ((hasChanges ?? false) && !skipHasChangesPrompt) {
 								const confirm: MessageItem = { title: 'Force Delete' };
 								const cancel: MessageItem = { title: 'Cancel', isCloseAffordance: true };
 								const result = await window.showWarningMessage(
@@ -1201,9 +1201,7 @@ export class WorktreeGitCommand extends QuickCommand<State> {
 				try {
 					if (state.changes.type !== 'index') {
 						// stage any untracked files to include them in the diff
-						const status = await sourceSvc.status.getStatus();
-
-						untrackedPaths = status?.untrackedChanges.map(f => f.path);
+						untrackedPaths = (await sourceSvc.status?.getUntrackedFiles())?.map(f => f.path);
 						if (untrackedPaths?.length) {
 							try {
 								await sourceSvc.staging?.stageFiles(untrackedPaths);

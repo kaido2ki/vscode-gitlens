@@ -91,7 +91,7 @@ export type GraphMinimapMarkerTypes =
 
 export const supportedRefMetadataTypes: GraphRefMetadataType[] = ['upstream', 'pullRequest', 'issue'];
 
-export interface State extends WebviewState {
+export interface State extends WebviewState<'gitlens.graph' | 'gitlens.views.graph'> {
 	windowFocused?: boolean;
 	webroot?: string;
 	repositories?: GraphRepository[];
@@ -117,6 +117,8 @@ export interface State extends WebviewState {
 	context?: GraphContexts & { settings?: SerializedGraphItemContext };
 	nonce?: string;
 	workingTreeStats?: GraphWorkingTreeStats;
+	/** Search query to be executed once */
+	searchRequest?: SearchQuery;
 	searchResults?: DidSearchParams['results'];
 	defaultSearchMode?: GraphSearchMode;
 	useNaturalLanguageSearch?: boolean;
@@ -327,6 +329,35 @@ export interface DidEnsureRowParams {
 }
 export const EnsureRowRequest = new IpcRequest<EnsureRowParams, DidEnsureRowParams>(scope, 'rows/ensure');
 
+export interface SearchHistoryGetParams {
+	repoPath: string | undefined;
+}
+export interface DidSearchHistoryGetParams {
+	history: SearchQuery[];
+}
+export const SearchHistoryGetRequest = new IpcRequest<SearchHistoryGetParams, DidSearchHistoryGetParams>(
+	scope,
+	'search/history/get',
+);
+
+export interface SearchHistoryStoreParams {
+	repoPath: string | undefined;
+	search: SearchQuery;
+}
+export const SearchHistoryStoreRequest = new IpcRequest<SearchHistoryStoreParams, DidSearchHistoryGetParams>(
+	scope,
+	'search/history/store',
+);
+
+export interface SearchHistoryDeleteParams {
+	repoPath: string | undefined;
+	query: string;
+}
+export const SearchHistoryDeleteRequest = new IpcRequest<SearchHistoryDeleteParams, DidSearchHistoryGetParams>(
+	scope,
+	'search/history/delete',
+);
+
 export type DidGetCountParams =
 	| {
 			branches: number;
@@ -383,7 +414,7 @@ export const DidChangeRepoConnectionNotification = new IpcNotification<DidChange
 export interface DidChangeParams {
 	state: State;
 }
-export const DidChangeNotification = new IpcNotification<DidChangeParams>(scope, 'didChange', true, true);
+export const DidChangeNotification = new IpcNotification<DidChangeParams>(scope, 'didChange', true);
 
 export interface DidChangeGraphConfigurationParams {
 	config: GraphComponentConfig;
@@ -467,12 +498,7 @@ export interface DidChangeRowsParams {
 	searchResults?: GraphSearchResults;
 	selectedRows?: GraphSelectedRows;
 }
-export const DidChangeRowsNotification = new IpcNotification<DidChangeRowsParams>(
-	scope,
-	'rows/didChange',
-	undefined,
-	true,
-);
+export const DidChangeRowsNotification = new IpcNotification<DidChangeRowsParams>(scope, 'rows/didChange');
 
 export interface DidChangeRowsStatsParams {
 	rowsStats: Record<string, GraphRowStats>;

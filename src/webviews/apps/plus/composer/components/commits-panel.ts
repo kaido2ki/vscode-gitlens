@@ -11,13 +11,14 @@ import {
 	getFileCountForCommit,
 	getUnassignedHunks,
 	getUniqueFileNames,
-} from '../../../../plus/composer/utils';
+} from '../../../../plus/composer/utils/composer.utils';
 import { focusableBaseStyles } from '../../../shared/components/styles/lit/a11y.css';
 import { boxSizingBase, inlineCode, scrollableBase } from '../../../shared/components/styles/lit/base.css';
 import { ruleStyles } from '../../shared/components/vscode.css';
 import { composerItemCommitStyles, composerItemContentStyles, composerItemStyles } from './composer.css';
 import '../../../shared/components/button';
 import '../../../shared/components/button-container';
+import '../../../shared/components/overlays/popover';
 import './commit-item';
 
 @customElement('gl-commits-panel')
@@ -285,7 +286,15 @@ export class CommitsPanel extends LitElement {
 			}
 
 			.auto-compose__instructions-info {
-				--gl-tooltip-max-width: 37rem;
+				--max-width: 37rem;
+
+				a:has(.inline-code) {
+					text-decoration: none;
+					white-space: nowrap;
+				}
+				.inline-code code-icon {
+					vertical-align: middle;
+				}
 			}
 			.auto-compose__instructions-input {
 				width: 100%;
@@ -360,7 +369,16 @@ export class CommitsPanel extends LitElement {
 	isPreviewMode: boolean = false;
 
 	@property({ type: Object })
+	recompose: { enabled: boolean; branchName?: string; locked: boolean } | null = null;
+
+	@property({ type: Boolean })
+	canReorderCommits: boolean = true;
+
+	@property({ type: Object })
 	baseCommit: ComposerBaseCommit | null = null;
+
+	@property({ type: String })
+	repoName: string | null = null;
 
 	@property({ type: String })
 	customInstructions: string = '';
@@ -395,6 +413,22 @@ export class CommitsPanel extends LitElement {
 	@query('.finish-commit')
 	finishSection!: HTMLElement;
 
+	private get isRecomposeLocked(): boolean {
+		return this.recompose?.enabled === true && this.recompose.locked === true;
+	}
+
+	private get finishHeaderText(): string {
+		return this.recompose?.enabled && this.recompose.branchName
+			? `Recompose ${this.recompose.branchName}`
+			: 'Finish & Commit';
+	}
+
+	private get finishDescriptionText(): string {
+		return this.recompose?.enabled
+			? 'The branch will be updated with the new commit structure.'
+			: 'New commits will be added to your current branch.';
+	}
+
 	private commitsSortable?: Sortable;
 	private isDraggingHunks = false;
 	private draggedHunkIds: string[] = [];
@@ -426,8 +460,8 @@ export class CommitsPanel extends LitElement {
 	}
 
 	private initializeSortable() {
-		// Don't initialize sortable in AI preview mode
-		if (this.isPreviewMode) {
+		// Don't initialize sortable if commit reordering is disabled
+		if (!this.canReorderCommits) {
 			return;
 		}
 
@@ -453,8 +487,8 @@ export class CommitsPanel extends LitElement {
 	}
 
 	private initializeDropZones() {
-		// Don't initialize drop zones in AI preview mode
-		if (this.isPreviewMode) {
+		// Don't initialize drop zones in AI preview mode or when functionality is locked
+		if (this.isPreviewMode || !this.canReorderCommits) {
 			return;
 		}
 
@@ -475,8 +509,8 @@ export class CommitsPanel extends LitElement {
 	}
 
 	private initializeCommitDropZones() {
-		// Don't initialize commit drop zones in AI preview mode
-		if (this.isPreviewMode) {
+		// Don't initialize commit drop zones in AI preview mode or when functionality is locked
+		if (this.isPreviewMode || !this.canReorderCommits) {
 			return;
 		}
 
@@ -1027,12 +1061,22 @@ export class CommitsPanel extends LitElement {
 		return html`
 			<div class="auto-compose${this.hasUsedAutoCompose ? ' is-used' : ''}">
 				${when(
-					!this.hasUsedAutoCompose,
+					!this.hasUsedAutoCompose && !this.isRecomposeLocked,
 					() => html`
 						<h4 class="auto-compose__header">Auto-Compose Commits with AI (Preview)</h4>
 						<p class="auto-compose__description">
 							Let AI organize your changes into well-formed commits with clear messages and descriptions
 							that help reviewers.
+						</p>
+					`,
+				)}
+				${when(
+					this.isRecomposeLocked,
+					() => html`
+						<h4 class="auto-compose__header">Recompose Commits with AI (Preview)</h4>
+						<p class="auto-compose__description">
+							Let AI reorganize work into logical commits with clear messages and descriptions that help
+							reviewers.
 						</p>
 					`,
 				)}
@@ -1059,9 +1103,11 @@ export class CommitsPanel extends LitElement {
 						@input=${this.handleCustomInstructionsChange}
 						?disabled=${disabled}
 					></textarea>
-					<gl-button ?disabled=${disabled} appearance="toolbar" class="auto-compose__instructions-info">
-						<code-icon icon="info"></code-icon>
-						<div slot="tooltip">
+					<gl-popover placement="bottom" trigger="click focus" class="auto-compose__instructions-info">
+						<gl-button slot="anchor" appearance="toolbar">
+							<code-icon icon="info"></code-icon>
+						</gl-button>
+						<div slot="content">
 							Providing additional instructions can help steer the AI composition for this session.
 							<br /><br />
 							Potential instructions include:
@@ -1073,9 +1119,15 @@ export class CommitsPanel extends LitElement {
 							<hr />
 							You can also specify custom instructions that apply to all composer sessions with the
 							following setting:
-							<code class="inline-code">gitlens.ai.generateCommits.customInstructions</code>
+							<a
+								href=${`command:workbench.action.openSettings?%22@id:gitlens.ai.generateCommits.customInstructions%22`}
+								><code class="inline-code"
+									><code-icon icon="gear" size="10"></code-icon>
+									gitlens.ai.generateCommits.customInstructions</code
+								></a
+							>
 						</div>
-					</gl-button>
+					</gl-popover>
 				</div>
 
 				<!-- Auto-Compose button -->
@@ -1096,7 +1148,7 @@ export class CommitsPanel extends LitElement {
 								></code-icon>
 								${this.generating
 									? 'Generating Commits...'
-									: this.hasUsedAutoCompose
+									: this.hasUsedAutoCompose || this.isRecomposeLocked
 										? 'Recompose Commits'
 										: 'Auto-Compose Commits'}
 							</gl-button>
@@ -1125,13 +1177,24 @@ export class CommitsPanel extends LitElement {
 		if (disabled) {
 			return html`
 				<div class="finish-commit">
-					<h3 class="finish-commit__header">Finish & Commit</h3>
-					<p class="finish-commit__description">New commits will be added to your current branch.</p>
+					<h3 class="finish-commit__header">${this.finishHeaderText}</h3>
+					<p class="finish-commit__description">${this.finishDescriptionText}</p>
 					<button-container layout="editor">
 						<gl-button full appearance="secondary" disabled>Create Commits</gl-button>
 					</button-container>
 					<button-container layout="editor" class="cancel-button-container">
 						<gl-button full appearance="secondary" disabled>Cancel</gl-button>
+					</button-container>
+				</div>
+			`;
+		}
+
+		// Special case for recompose locked mode - only show Cancel button
+		if (this.isRecomposeLocked) {
+			return html`
+				<div class="finish-commit">
+					<button-container layout="editor" class="cancel-button-container">
+						<gl-button full appearance="secondary" @click=${this.handleCancel}>Cancel</gl-button>
 					</button-container>
 				</div>
 			`;
@@ -1143,10 +1206,11 @@ export class CommitsPanel extends LitElement {
 				${when(
 					this.selectedCommitIds.size > 1 && !this.isPreviewMode,
 					() => html`
-						<h3 class="finish-commit__header">Finish & Commit</h3>
+						<h3 class="finish-commit__header">${this.finishHeaderText}</h3>
 						<p class="finish-commit__description">
-							New commits will be added to your current branch and a stash will be created with your
-							original changes.
+							${this.recompose?.enabled
+								? 'The branch will be updated with the new commit structure.'
+								: 'New commits will be added to your current branch.'}
 						</p>
 						<button-container layout="editor">
 							<gl-button
@@ -1165,11 +1229,9 @@ export class CommitsPanel extends LitElement {
 						</button-container>
 					`,
 					() => html`
-						<h3 class="finish-commit__header">Finish & Commit</h3>
+						<h3 class="finish-commit__header">${this.finishHeaderText}</h3>
 						<p class="finish-commit__description">
-							${this.isReadyToCommit
-								? 'New commits will be added to your current branch.'
-								: 'Commit the changes in this draft.'}
+							${this.isReadyToCommit ? this.finishDescriptionText : 'Commit the changes in this draft.'}
 						</p>
 
 						<!-- Single Create Commits button -->
@@ -1220,13 +1282,19 @@ export class CommitsPanel extends LitElement {
 
 							<!-- Base commit (informational only) -->
 							<div class="composer-item is-base">
-								<div class="composer-item__commit"></div>
+								<div class="composer-item__commit${this.baseCommit ? '' : ' is-empty'}"></div>
 								<div class="composer-item__content">
-									<div class="composer-item__header">${this.baseCommit?.message || 'HEAD'}</div>
+									<div
+										class="composer-item__header${this.baseCommit == null ? ' is-placeholder' : ''}"
+									>
+										${this.baseCommit?.message || 'No commits yet'}
+									</div>
 									<div class="composer-item__body">
-										<span class="repo-name">${this.baseCommit?.repoName || 'Repository'}</span>
-										<span>/</span>
-										<span class="branch-name">${this.baseCommit?.branchName || 'main'}</span>
+										<span class="repo-name">${this.repoName || 'Repository'}</span>
+										${this.baseCommit?.branchName
+											? html`<span>/</span
+													><span class="branch-name">${this.baseCommit.branchName}</span>`
+											: ''}
 									</div>
 								</div>
 							</div>
@@ -1240,18 +1308,22 @@ export class CommitsPanel extends LitElement {
 		return html`
 			<div class="container scrollable">
 				<div class="working-section">
-					<!-- Auto-Compose container at top when not used yet -->
-					${when(!this.hasUsedAutoCompose, () => this.renderAutoComposeContainer())}
+					<!-- Auto-Compose container at top when not used yet and not in recompose locked mode -->
+					${when(!this.hasUsedAutoCompose && !this.isRecomposeLocked, () =>
+						this.renderAutoComposeContainer(),
+					)}
 					<div class="commits-list">
-						${this.hasUsedAutoCompose
+						${this.hasUsedAutoCompose && !this.isRecomposeLocked
 							? this.renderCompositionSummarySection()
-							: this.renderUnassignedSection()}
+							: !this.isRecomposeLocked
+								? this.renderUnassignedSection()
+								: ''}
 
-						<h3 class="commits-header">Draft Commits</h3>
+						<h3 class="commits-header">${this.isRecomposeLocked ? 'Commits' : 'Draft Commits'}</h3>
 
 						<!-- Drop zone for creating new commits (only visible when dragging hunks in interactive mode) -->
 						${when(
-							!this.isPreviewMode && this.shouldShowNewCommitZone,
+							!this.isPreviewMode && this.canReorderCommits && this.shouldShowNewCommitZone,
 							() => html`
 								<div class="new-commit-drop-zone">
 									<div class="drop-zone-content">
@@ -1278,7 +1350,9 @@ export class CommitsPanel extends LitElement {
 											.selected=${this.selectedCommitId === commit.id}
 											.multiSelected=${this.selectedCommitIds.has(commit.id)}
 											.isPreviewMode=${this.isPreviewMode}
+											.isRecomposeLocked=${this.isRecomposeLocked}
 											?first=${i === 0}
+											?last=${i === this.commits.length - 1 && !this.baseCommit}
 											@click=${(e: MouseEvent) => this.dispatchCommitSelect(commit.id, e)}
 											@keydown=${(e: KeyboardEvent) => this.dispatchCommitSelect(commit.id, e)}
 										></gl-commit-item>
@@ -1289,13 +1363,17 @@ export class CommitsPanel extends LitElement {
 
 						<!-- Base commit (informational only) -->
 						<div class="composer-item is-base">
-							<div class="composer-item__commit"></div>
+							<div class="composer-item__commit${this.baseCommit ? '' : ' is-empty'}"></div>
 							<div class="composer-item__content">
-								<div class="composer-item__header">${this.baseCommit?.message || 'HEAD'}</div>
+								<div class="composer-item__header${this.baseCommit == null ? ' is-placeholder' : ''}">
+									${this.baseCommit?.message || 'No commits yet'}
+								</div>
 								<div class="composer-item__body">
-									<span class="repo-name">${this.baseCommit?.repoName || 'Repository'}</span>
-									<span>/</span>
-									<span class="branch-name">${this.baseCommit?.branchName || 'main'}</span>
+									<span class="repo-name">${this.repoName || 'Repository'}</span>
+									${this.baseCommit?.branchName
+										? html`<span>/</span
+												><span class="branch-name">${this.baseCommit.branchName}</span>`
+										: ''}
 								</div>
 							</div>
 						</div>
@@ -1313,8 +1391,8 @@ export class CommitsPanel extends LitElement {
 							`,
 						)}
 					</div>
-					<!-- Auto-Compose container in original position when already used -->
-					${when(this.hasUsedAutoCompose, () => this.renderAutoComposeContainer())}
+					<!-- Auto-Compose container in original position when already used or in recompose locked mode -->
+					${when(this.hasUsedAutoCompose || this.isRecomposeLocked, () => this.renderAutoComposeContainer())}
 				</div>
 				${this.renderFinishCommitSection()}
 			</div>

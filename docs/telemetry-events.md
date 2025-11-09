@@ -2174,6 +2174,7 @@ or
   'context.config.dimMergeCommits': boolean,
   'context.config.experimental.renderer.enabled': boolean,
   'context.config.highlightRowsOnRefHover': boolean,
+  'context.config.initialRowSelection': 'wip' | 'head',
   'context.config.issues.enabled': boolean,
   'context.config.layout': 'editor' | 'panel',
   'context.config.minimap.additionalTypes': string,
@@ -2810,6 +2811,27 @@ void
 ```typescript
 {
   'source': 'account' | 'subscription' | 'graph' | 'composer' | 'patchDetails' | 'settings' | 'timeline' | 'home' | 'ai' | 'ai:markdown-preview' | 'ai:markdown-editor' | 'ai:picker' | 'associateIssueWithBranch' | 'cloud-patches' | 'code-suggest' | 'commandPalette' | 'deeplink' | 'editor:hover' | 'feature-badge' | 'feature-gate' | 'gk-cli-integration' | 'gk-mcp-provider' | 'inspect' | 'inspect-overview' | 'integrations' | 'launchpad' | 'launchpad-indicator' | 'launchpad-view' | 'mcp' | 'mcp-welcome-message' | 'merge-target' | 'notification' | 'prompt' | 'quick-wizard' | 'rebaseEditor' | 'remoteProvider' | 'scm' | 'scm-input' | 'startWork' | 'trial-indicator' | 'view' | 'walkthrough' | 'whatsnew' | 'worktrees'
+}
+```
+
+### op/gate/deadlock
+
+```typescript
+{
+  'key': string,
+  'prop': string,
+  'timeout': number
+}
+```
+
+### op/git/aborted
+
+```typescript
+{
+  'duration': number,
+  'operation': string,
+  'reason': 'unknown' | 'timeout' | 'cancellation',
+  'timeout': number
 }
 ```
 

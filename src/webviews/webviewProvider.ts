@@ -1,7 +1,7 @@
 import type { Disposable, Uri, ViewBadge, ViewColumn } from 'vscode';
 import type { WebviewCommands, WebviewViewCommands } from '../constants.commands';
 import type { WebviewTelemetryContext } from '../constants.telemetry';
-import type { WebviewIds, WebviewViewIds } from '../constants.views';
+import type { WebviewIds, WebviewOrWebviewViewTypeFromId, WebviewViewIds } from '../constants.views';
 import type { WebviewContext } from '../system/webview';
 import type {
 	IpcCallMessageType,
@@ -35,7 +35,7 @@ export interface WebviewProvider<State, SerializedState = State, ShowingArgs ext
 		| Promise<[boolean, Record<`context.${string}`, string | number | boolean | undefined> | undefined]>;
 	registerCommands?(): Disposable[];
 
-	includeBootstrap?(): SerializedState | Promise<SerializedState>;
+	includeBootstrap?(deferrable?: boolean): SerializedState | Promise<SerializedState>;
 	includeHead?(): string | Promise<string>;
 	includeBody?(): string | Promise<string>;
 	includeEndOfBody?(): string | Promise<string>;
@@ -58,6 +58,7 @@ export interface WebviewStateProvier<State, SerializedState, ShowingArgs extends
 export interface WebviewHost<ID extends WebviewIds | WebviewViewIds> {
 	readonly id: ID;
 	readonly instanceId: string;
+	readonly type: WebviewOrWebviewViewTypeFromId<ID>;
 
 	readonly originalTitle: string;
 	title: string;
@@ -68,7 +69,7 @@ export interface WebviewHost<ID extends WebviewIds | WebviewViewIds> {
 	readonly ready: boolean;
 	readonly viewColumn: ViewColumn | undefined;
 	readonly visible: boolean;
-	readonly baseWebviewState: WebviewState;
+	readonly baseWebviewState: WebviewState<ID>;
 	readonly cspNonce: string;
 
 	getWebRoot(): string;

@@ -10,7 +10,7 @@ import {
 	WorktreeCreateError,
 } from '../../../../git/errors';
 import type { GitPatchSubProvider } from '../../../../git/gitProvider';
-import type { GitCommit } from '../../../../git/models/commit';
+import type { GitCommit, GitCommitIdentityShape } from '../../../../git/models/commit';
 import { log } from '../../../../system/decorators/log';
 import { Logger } from '../../../../system/logger';
 import { getLogScope } from '../../../../system/logger.scope';
@@ -40,8 +40,8 @@ export class PatchGitSubProvider implements GitPatchSubProvider {
 
 		if (options?.stash) {
 			// Stash any changes first
-			const status = await this.provider.status?.getStatus(repoPath);
-			if (status?.files?.length) {
+			const hasChanges = await this.provider.status?.hasWorkingChanges(repoPath);
+			if (hasChanges) {
 				if (options.stash === 'prompt') {
 					const confirm = { title: 'Stash Changes' };
 					const cancel = { title: 'Cancel', isCloseAffordance: true };
@@ -122,14 +122,14 @@ export class PatchGitSubProvider implements GitPatchSubProvider {
 
 		if (options?.branchName != null && currentBranch?.name !== options.branchName) {
 			const checkoutRef = shouldCreate ? (currentBranch?.ref ?? 'HEAD') : options.branchName;
-			await this.provider.checkout(targetPath, checkoutRef, {
+			await this.provider.ops.checkout(targetPath, checkoutRef, {
 				createBranch: shouldCreate ? options.branchName : undefined,
 			});
 		}
 
 		// Apply the patch using a cherry pick without committing
 		try {
-			await this.provider.commits.cherryPick(targetPath, [rev], { noCommit: true });
+			await this.provider.ops.cherryPick(targetPath, [rev], { noCommit: true });
 		} catch (ex) {
 			Logger.error(ex, scope);
 			if (ex instanceof CherryPickError) {
@@ -177,8 +177,8 @@ export class PatchGitSubProvider implements GitPatchSubProvider {
 	@log<PatchGitSubProvider['createUnreachableCommitsFromPatches']>({ args: { 2: p => p.length } })
 	async createUnreachableCommitsFromPatches(
 		repoPath: string,
-		base: string,
-		patches: { message: string; patch: string }[],
+		base: string | undefined,
+		patches: { message: string; patch: string; author?: GitCommitIdentityShape }[],
 	): Promise<string[]> {
 		// Create a temporary index file
 		await using disposableIndex = await this.provider.staging!.createTemporaryIndex(repoPath, base);
@@ -186,8 +186,8 @@ export class PatchGitSubProvider implements GitPatchSubProvider {
 
 		const shas: string[] = [];
 
-		for (const { message, patch } of patches) {
-			const sha = await this.createUnreachableCommitForPatchCore(env, repoPath, base, message, patch);
+		for (const { message, patch, author } of patches) {
+			const sha = await this.createUnreachableCommitForPatchCore(env, repoPath, base, message, patch, author);
 			shas.push(sha);
 			base = sha;
 		}
@@ -198,9 +198,10 @@ export class PatchGitSubProvider implements GitPatchSubProvider {
 	private async createUnreachableCommitForPatchCore(
 		env: Record<string, any>,
 		repoPath: string,
-		base: string,
+		base: string | undefined,
 		message: string,
 		patch: string,
+		author?: GitCommitIdentityShape,
 	): Promise<string> {
 		const scope = getLogScope();
 
@@ -221,8 +222,24 @@ export class PatchGitSubProvider implements GitPatchSubProvider {
 			let result = await this.git.exec({ cwd: repoPath, env: env }, 'write-tree');
 			const tree = result.stdout.trim();
 
+			// Set the author if provided
+			const commitEnv = author
+				? {
+						...env,
+						GIT_AUTHOR_NAME: author.name,
+						GIT_AUTHOR_EMAIL: author.email || '',
+					}
+				: env;
+
 			// Create new commit from the tree
-			result = await this.git.exec({ cwd: repoPath, env: env }, 'commit-tree', tree, '-p', base, '-m', message);
+			result = await this.git.exec(
+				{ cwd: repoPath, env: commitEnv },
+				'commit-tree',
+				tree,
+				...(base ? ['-p', base] : []),
+				'-m',
+				message,
+			);
 			const sha = result.stdout.trim();
 
 			return sha;
@@ -232,6 +249,16 @@ export class PatchGitSubProvider implements GitPatchSubProvider {
 
 			throw ex;
 		}
+	}
+
+	async createEmptyInitialCommit(repoPath: string): Promise<string> {
+		const emptyTree = await this.git.exec({ cwd: repoPath }, 'hash-object', '-t', 'tree', '/dev/null');
+		const result = await this.git.exec({ cwd: repoPath }, 'commit-tree', emptyTree.stdout.trim(), '-m', 'temp');
+		// create ref/heaads/main and point to it
+		await this.git.exec({ cwd: repoPath }, 'update-ref', 'refs/heads/main', result.stdout.trim());
+		// point HEAD to the branch
+		await this.git.exec({ cwd: repoPath }, 'symbolic-ref', 'HEAD', 'refs/heads/main');
+		return result.stdout.trim();
 	}
 
 	@log({ args: { 1: false } })

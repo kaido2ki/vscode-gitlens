@@ -691,7 +691,7 @@ export async function restoreFile(
 		}
 	}
 
-	await Container.instance.git.getRepositoryService(revision.repoPath).checkout(rev, { path: path });
+	await Container.instance.git.getRepositoryService(revision.repoPath).ops?.checkout(rev, { path: path });
 }
 
 export function revealCommit(commit: GitRevisionReference, options?: RevealOptions): Promise<ViewNode | undefined> {
@@ -801,8 +801,9 @@ export async function undoCommit(container: Container, commit: GitRevisionRefere
 		return;
 	}
 
-	const status = await svc.status.getStatus();
-	if (status?.files.length) {
+	// Check for uncommitted changes before prompting
+	const hasChanges = await svc.status.hasWorkingChanges();
+	if (hasChanges) {
 		const confirm = { title: 'Undo Commit' };
 		const cancel = { title: 'Cancel', isCloseAffordance: true };
 		const result = await window.showWarningMessage(

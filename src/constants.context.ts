@@ -1,4 +1,5 @@
 import type { Uri } from 'vscode';
+import type { FileAnnotationType } from './config';
 import type { AnnotationStatus, Keys } from './constants';
 import type { SubscriptionState } from './constants.subscription';
 import type { CustomEditorTypes, GroupableTreeViewTypes, WebviewTypes, WebviewViewTypes } from './constants.views';
@@ -7,6 +8,12 @@ import type { Features } from './features';
 import type { OrgAIProviders } from './plus/gk/models/organization';
 import type { PromoKeys } from './plus/gk/models/promo';
 import type { SubscriptionPlanIds } from './plus/gk/models/subscription';
+
+interface CompareSelectedFileInfo {
+	ref: string;
+	repoPath: string | undefined;
+	uri: Uri;
+}
 
 export type ContextKeys = {
 	'gitlens:debugging': boolean;
@@ -42,12 +49,13 @@ export type ContextKeys = {
 	'gitlens:tabs:ai:unhelpful': Uri[];
 	'gitlens:tabs:ai:changelog': Uri[];
 	'gitlens:tabs:annotated': Uri[];
+	'gitlens:tabs:annotated:changes': Uri[];
 	'gitlens:tabs:annotated:computing': Uri[];
 	'gitlens:tabs:blameable': Uri[];
 	'gitlens:tabs:tracked': Uri[];
 	'gitlens:untrusted': boolean;
 	'gitlens:views:canCompare': boolean;
-	'gitlens:views:canCompare:file': boolean;
+	'gitlens:views:canCompare:file': CompareSelectedFileInfo;
 	'gitlens:views:commits:filtered': boolean;
 	'gitlens:views:commits:hideMergeCommits': boolean;
 	'gitlens:views:contributors:hideMergeCommits': boolean;
@@ -63,7 +71,7 @@ export type ContextKeys = {
 	'gitlens:views:scm:grouped:view': GroupableTreeViewTypes;
 	'gitlens:views:scm:grouped:welcome': boolean;
 	'gitlens:vsls': boolean | 'host' | 'guest';
-	'gitlens:window:annotated': AnnotationStatus;
+	'gitlens:window:annotated': AnnotationStatus | `${AnnotationStatus}:${FileAnnotationType}`;
 	'gitlens:walkthroughSupported': boolean;
 } & Record<`gitlens:action:${string}`, number> &
 	Record<`gitlens:feature:unsupported:${Features}`, boolean> &

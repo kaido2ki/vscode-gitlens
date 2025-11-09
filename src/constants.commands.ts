@@ -94,6 +94,8 @@ type InternalSearchAndCompareViewCommands = 'gitlens.views.searchAndCompare.comp
 
 type InternalTimelineWebviewViewCommands = 'gitlens.views.timeline.openInTab';
 
+type InternalViewCommands = 'gitlens.views.loadMoreChildren';
+
 type InternalWalkthroughCommands =
 	| 'gitlens.walkthrough.connectIntegrations'
 	| 'gitlens.walkthrough.enableAiSetting'
@@ -128,6 +130,7 @@ type InternalGlCommands =
 	| 'gitlens.ai.feedback.helpful'
 	| 'gitlens.ai.feedback.unhelpful'
 	| 'gitlens.ai.mcp.authCLI'
+	| 'gitlens.ai.undoGenerateRebase'
 	| 'gitlens.changeBranchMergeTarget'
 	| 'gitlens.diffWith'
 	| 'gitlens.diffWithPrevious:codelens'
@@ -135,12 +138,15 @@ type InternalGlCommands =
 	| 'gitlens.diffWithPrevious:views'
 	| 'gitlens.diffWithWorking:command'
 	| 'gitlens.diffWithWorking:views'
+	| 'gitlens.openCloudPatch'
 	| 'gitlens.openOnRemote'
 	| 'gitlens.openWalkthrough'
 	| 'gitlens.openWorkingFile:command'
 	| 'gitlens.refreshHover'
 	| 'gitlens.regenerateMarkdownDocument'
 	| 'gitlens.showComposerPage'
+	| 'gitlens.showInCommitGraphView'
+	| 'gitlens.showQuickCommitDetails'
 	| 'gitlens.storage.store'
 	| 'gitlens.toggleFileBlame:codelens'
 	| 'gitlens.toggleFileBlame:mode'
@@ -161,6 +167,7 @@ type InternalGlCommands =
 	| InternalScmGroupedViewCommands
 	| InternalSearchAndCompareViewCommands
 	| InternalTimelineWebviewViewCommands
+	| InternalViewCommands
 	| InternalWalkthroughCommands;
 
 export type GlCommands = ContributedCommands | InternalGlCommands; // | GlCommandsDeprecated;
@@ -238,9 +245,32 @@ export type TreeViewCommandSuffixesByViewType<T extends TreeViewTypes> = Extract
 	TreeViewCommandsByViewType<T>
 >;
 
-export type WebviewCommands =
-	| FilterCommands<`gitlens.${WebviewTypes}`, GlCommands>
-	| FilterCommands<'gitlens.', GlCommands, `:${WebviewTypes}`>;
-export type WebviewViewCommands =
-	| FilterCommands<`gitlens.views.${WebviewViewTypes}`, GlCommands>
-	| FilterCommands<'gitlens.views.', GlCommands, `:${WebviewViewTypes}`>;
+export type WebviewCommands<T extends WebviewTypes = WebviewTypes> =
+	| FilterCommands<`gitlens.${T}`, GlCommands>
+	| FilterCommands<'gitlens.', GlCommands, `:${T}`>;
+export type WebviewViewCommands<T extends WebviewViewTypes = WebviewViewTypes> =
+	| FilterCommands<`gitlens.views.${T}`, GlCommands>
+	| FilterCommands<'gitlens.views.', GlCommands, `:${T}`>
+	| FilterCommands<'gitlens.', GlCommands, `:${T}`>;
+
+/**
+ * Extracts all possible prefixes (before the colon) from a union of commands.
+ * Example: 'gitlens.foo:graph' | 'gitlens.bar:timeline' -> 'gitlens.foo' | 'gitlens.bar'
+ */
+type ExtractCommandPrefix<
+	T extends GlCommands,
+	U extends WebviewTypes | WebviewViewTypes,
+> = T extends `${infer Prefix}:${U}` ? `${Prefix}:` : never;
+
+type WebviewCommandPrefixes<T extends WebviewTypes = WebviewTypes> = ExtractCommandPrefix<WebviewCommands<T>, T>;
+export type WebviewCommandsOrCommandsWithSuffix<T extends WebviewTypes = WebviewTypes> =
+	| WebviewCommands<T>
+	| WebviewCommandPrefixes<T>;
+
+type WebviewViewCommandPrefixes<T extends WebviewViewTypes = WebviewViewTypes> = ExtractCommandPrefix<
+	WebviewViewCommands<T>,
+	T
+>;
+export type WebviewViewCommandsOrCommandsWithSuffix<T extends WebviewViewTypes = WebviewViewTypes> =
+	| WebviewViewCommands<T>
+	| WebviewViewCommandPrefixes<T>;

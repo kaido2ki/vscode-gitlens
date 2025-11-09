@@ -445,7 +445,7 @@ export class HomeWebviewProvider implements WebviewProvider<State, State, HomeWe
 		}
 	}
 
-	includeBootstrap(): Promise<State> {
+	includeBootstrap(_deferrable?: boolean): Promise<State> {
 		return this.getState();
 	}
 
@@ -1394,10 +1394,9 @@ export class HomeWebviewProvider implements WebviewProvider<State, State, HomeWe
 				{ modal: true },
 				{ title: 'Continue' },
 			);
+			if (confirm?.title !== 'Continue') return;
 
-			if (confirm == null || confirm.title !== 'Continue') return;
-
-			await this.container.git.getRepositoryService(ref.repoPath).checkout(mergeTargetLocalBranchName);
+			await this.container.git.getRepositoryService(ref.repoPath).ops?.checkout(mergeTargetLocalBranchName);
 
 			void executeGitCommand({
 				command: 'branch',
@@ -1417,8 +1416,7 @@ export class HomeWebviewProvider implements WebviewProvider<State, State, HomeWe
 				{ modal: true },
 				{ title: 'Continue' },
 			);
-
-			if (confirm == null || confirm.title !== 'Continue') return;
+			if (confirm?.title !== 'Continue') return;
 
 			const schemeOverride = configuration.get('deepLinks.schemeOverride');
 			const scheme = typeof schemeOverride === 'string' ? schemeOverride : env.uriScheme;
@@ -1460,7 +1458,7 @@ export class HomeWebviewProvider implements WebviewProvider<State, State, HomeWe
 		args: { 0: r => `${r.branchId}, upstream: ${r.branchUpstreamName}` },
 	})
 	private pushBranch(ref: BranchRef) {
-		void this.container.git.getRepositoryService(ref.repoPath).push({
+		void this.container.git.getRepositoryService(ref.repoPath).ops?.push({
 			reference: {
 				name: ref.branchName,
 				ref: ref.branchId,
@@ -1991,7 +1989,9 @@ async function getWipInfo(
 
 	const [statusResult, pausedOpStatusResult] = await Promise.allSettled([
 		statusPromise,
-		active ? container.git.getRepositoryService(branch.repoPath).status.getPausedOperationStatus?.() : undefined,
+		active
+			? container.git.getRepositoryService(branch.repoPath).pausedOps?.getPausedOperationStatus?.()
+			: undefined,
 	]);
 
 	const status = getSettledValue(statusResult);

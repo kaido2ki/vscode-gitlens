@@ -6,6 +6,56 @@ The format is based on [Keep a Changelog](http://keepachangelog.com/) and this p
 
 ## [17.5.2] - 2025-10-05
 
+### Added
+
+- Adds AI powered operations for a branch: "Explain Unpushed Changed". They are added to the _Commit Graph_ and views context menu for branches ([#4443](https://github.com/gitkraken/vscode-gitlens/issues/4443))
+- Adds a new _Safe Hard Reset_ (`--keep`) option to Git _reset_ command
+- Adds support for reference or range commit searches on the _Commit Graph_, _Search & Compare_ view, and in the _Search Commits_ command ([#4723](https://github.com/gitkraken/vscode-gitlens/issues/4723))
+  - Adds natural language support to allow for more powerful queries
+- Adds ability to filter/search to branch & tag tips on the _Commit Graph_ ([#4726](https://github.com/gitkraken/vscode-gitlens/issues/4726))
+- Adds a navigable search history to the search box on the _Commit Graph_ ([#4724](https://github.com/gitkraken/vscode-gitlens/issues/4724))
+- Adds ability to show file or folder histories on the _Commit Graph_ ([#4725](https://github.com/gitkraken/vscode-gitlens/issues/4725))
+  - Adds _Open File History in Commit Graph_ command to files in views
+  - Adds _Open Folder History in Commit Graph_ command to folders in the Explorer view
+
+### Changed
+
+- Changes to select the "Work in progress" (WIP) row in the _Commit Graph_ by default if there are uncommitted changes ([#4716](https://github.com/gitkraken/vscode-gitlens/issues/4716))
+  - Adds `gitlens.graph.initialRowSelection` setting to specify whether to select the "Work in progress" (WIP) row instead of HEAD if there are uncommitted changes
+- Changes to use the "merge target" when we are creating pull requests ([#4709](https://github.com/gitkraken/vscode-gitlens/issues/4709))
+- Changes the minimum VS Code version to 1.95.0 ([#4691](https://github.com/gitkraken/vscode-gitlens/issues/4691))
+- Greatly improves performance of the _Commit Composer_ view by virtualizing file diffs ([#4675](https://github.com/gitkraken/vscode-gitlens/issues/4675))
+
+### Fixed
+
+- Fixes intermittent stuck loading state on the _Commit Graph_ ([#4669](https://github.com/gitkraken/vscode-gitlens/issues/4669))
+- Fixes underlines showing on home branch actions ([#4703](https://github.com/gitkraken/vscode-gitlens/issues/4703))
+- Fixes _Inspect_ view not showing uncommitted files on the Inspect tab ([#4714](https://github.com/gitkraken/vscode-gitlens/issues/4714))
+- Fixes _Commit Graph_ losing row selection when graph updates ([#4544](https://github.com/gitkraken/vscode-gitlens/issues/4544))
+- Fixes "Element with id already registered" error on comparison w/ multiple repos ([#4521](https://github.com/gitkraken/vscode-gitlens/issues/4521))
+- Fixes _Commit Composer_ diffs misaligned with large editor font sizes ([#4573](https://github.com/gitkraken/vscode-gitlens/issues/4573))
+
+## [17.6.2] - 2025-10-16
+
+### Changed
+
+- Reduces view refresh frequency for showing last fetched time to improve performance and reduce overhead
+- Replaces OS-specific shell-based unzip with JS solution for better cross-platform support and reliability
+- Improves MCP checks and adds offline check ([#4687](https://github.com/gitkraken/vscode-gitlens/issues/4687))
+- Updates auto-compose instructions setting text to a link on _Commit Composer_
+
+### Fixed
+
+- Fixes MCP registration from breaking VS Code chat ([#4701](https://github.com/gitkraken/vscode-gitlens/issues/4701))
+- Fixes MCP extension registration not working on Kiro ([#4691](https://github.com/gitkraken/vscode-gitlens/issues/4691))
+- Fixes intermittent issue with autolinks not showing up ([#4692](https://github.com/gitkraken/vscode-gitlens/issues/4692))
+
+## [17.6.1] - 2025-10-08
+
+### Fixed
+
+- Fixes eyebrow banner not appearing for GitLens Community on Home ([#4670](https://github.com/gitkraken/vscode-gitlens/issues/4670))
+
 ## [17.6.0] - 2025-10-07
 
 ### Added
@@ -6383,7 +6433,9 @@ The format is based on [Keep a Changelog](http://keepachangelog.com/) and this p
 
 - Initial release but still heavily a work in progress.
 
-[unreleased]: https://github.com/gitkraken/vscode-gitlens/compare/v17.6.0...HEAD
+[unreleased]: https://github.com/gitkraken/vscode-gitlens/compare/v17.6.2...HEAD
+[17.6.2]: https://github.com/gitkraken/vscode-gitlens/compare/v17.6.1...gitkraken:v17.6.2
+[17.6.1]: https://github.com/gitkraken/vscode-gitlens/compare/v17.6.0...gitkraken:v17.6.1
 [17.6.0]: https://github.com/gitkraken/vscode-gitlens/compare/v17.5.1...gitkraken:v17.6.0
 [17.5.1]: https://github.com/gitkraken/vscode-gitlens/compare/v17.5.0...gitkraken:v17.5.1
 [17.5.0]: https://github.com/gitkraken/vscode-gitlens/compare/v17.4.1...gitkraken:v17.5.0

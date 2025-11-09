@@ -10,7 +10,6 @@ import { GlElement } from '../element';
 import type { GlSearchInput, SearchModeChangeEventDetail, SearchNavigationEventDetail } from './search-input';
 import '../code-icon';
 import '../overlays/tooltip';
-import '../progress';
 import './search-input';
 
 export { SearchModeChangeEventDetail, SearchNavigationEventDetail };
@@ -39,9 +38,6 @@ export class GlSearchBox extends GlElement {
 		}
 		:host(:focus) {
 			outline: 0;
-		}
-		progress-indicator {
-			top: -4px;
 		}
 
 		.search-navigation {
@@ -166,11 +162,26 @@ export class GlSearchBox extends GlElement {
 	}
 
 	logSearch(query: SearchQuery): void {
-		this.searchInput?.logSearch(query);
+		void this.searchInput?.logSearch(query);
 	}
 
 	setSearchQuery(query: string): void {
 		this._value = query;
+	}
+
+	/**
+	 * Updates the search query from an external source (e.g., extension host).
+	 * This will update all search properties without triggering a new search.
+	 */
+	setExternalSearchQuery(search: SearchQuery): void {
+		this._value = search.query;
+		this.filter = search.filter ?? true;
+		this.matchAll = search.matchAll ?? false;
+		this.matchCase = search.matchCase ?? false;
+		this.matchRegex = search.matchRegex ?? true;
+		this.matchWholeWord = search.matchWholeWord ?? false;
+		this.naturalLanguage = Boolean(search.naturalLanguage);
+		this.searchInput?.setExternalSearchQuery(search);
 	}
 
 	private handleShortcutKeys(e: KeyboardEvent) {
@@ -300,7 +311,6 @@ export class GlSearchBox extends GlElement {
 						<code-icon icon="link-external" aria-label="Show Results in Side Bar"></code-icon>
 					</button>
 				</gl-tooltip>
-			</div>
-			<progress-indicator ?active="${this.searching}"></progress-indicator>`;
+			</div>`;
 	}
 }

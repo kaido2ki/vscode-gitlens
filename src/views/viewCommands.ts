@@ -5,6 +5,7 @@ import type { CreatePullRequestActionContext, OpenPullRequestActionContext } fro
 import type { DiffWithCommandArgs } from '../commands/diffWith';
 import type { DiffWithPreviousCommandArgs } from '../commands/diffWithPrevious';
 import type { DiffWithWorkingCommandArgs } from '../commands/diffWithWorking';
+import type { ExplainBranchCommandArgs } from '../commands/explainBranch';
 import type { GenerateChangelogCommandArgs } from '../commands/generateChangelog';
 import { generateChangelogAndOpenMarkdownDocument } from '../commands/generateChangelog';
 import type { GenerateRebaseCommandArgs } from '../commands/generateRebase';
@@ -51,7 +52,7 @@ import {
 	registerCommand,
 } from '../system/-webview/command';
 import { configuration } from '../system/-webview/configuration';
-import { setContext } from '../system/-webview/context';
+import { getContext, setContext } from '../system/-webview/context';
 import { revealInFileExplorer } from '../system/-webview/vscode';
 import type { MergeEditorInputs } from '../system/-webview/vscode/editors';
 import { editorLineToDiffRange, openMergeEditor } from '../system/-webview/vscode/editors';
@@ -106,13 +107,14 @@ import type { StashNode } from './nodes/stashNode';
 import type { StatusFileNode } from './nodes/statusFileNode';
 import type { TagNode } from './nodes/tagNode';
 import type { TagsNode } from './nodes/tagsNode';
+import type { UncommittedFileNode } from './nodes/UncommittedFileNode';
 import type { UncommittedFilesNode } from './nodes/UncommittedFilesNode';
 import type { WorktreeNode } from './nodes/worktreeNode';
 import type { WorktreesNode } from './nodes/worktreesNode';
 
 const { command, getCommands } = createCommandDecorator<
-	(...args: any[]) => unknown,
 	GlCommands,
+	(...args: any[]) => unknown,
 	{
 		multiselect?: boolean | 'sequential';
 		args?: (...args: unknown[]) => unknown[];
@@ -926,6 +928,21 @@ export class ViewCommands implements Disposable {
 		});
 	}
 
+	@command('gitlens.ai.explainUnpushed:views')
+	@log()
+	private async explainUnpushed(node: BranchNode) {
+		if (!node.is('branch') || !node.branch.upstream) {
+			return Promise.resolve();
+		}
+
+		await executeCommand<ExplainBranchCommandArgs>('gitlens.ai.explainBranch', {
+			repoPath: node.repoPath,
+			ref: node.branch.ref,
+			baseBranch: node.branch.upstream.name,
+			source: { source: 'view', context: { type: 'branch' } },
+		});
+	}
+
 	@command('gitlens.views.rebaseOntoUpstream')
 	@log()
 	private rebaseToRemote(node: BranchNode | BranchTrackingStatusNode) {
@@ -1074,7 +1091,7 @@ export class ViewCommands implements Disposable {
 	@command('gitlens.views.stageFile')
 	@log()
 	private async stageFile(node: CommitFileNode | FileRevisionAsCommitNode | StatusFileNode) {
-		if (!node.isAny('commit-file', 'file-commit') && !node.is('status-file')) {
+		if (!node.isAny('commit-file', 'file-commit', 'status-file')) {
 			return;
 		}
 
@@ -1318,36 +1335,31 @@ export class ViewCommands implements Disposable {
 	@command('gitlens.views.compareFileWithSelected')
 	@log()
 	private compareFileWithSelected(node: ViewRefFileNode) {
-		if (this._selectedFile == null || !(node instanceof ViewRefFileNode) || node.ref == null) {
+		const selectedFile = getContext('gitlens:views:canCompare:file');
+		if (selectedFile == null || !(node instanceof ViewRefFileNode) || node.ref == null) {
 			return Promise.resolve();
 		}
 
-		if (this._selectedFile.repoPath !== node.repoPath) {
+		void setContext('gitlens:views:canCompare:file', undefined);
+
+		if (selectedFile.repoPath !== node.repoPath) {
 			this.selectFileForCompare(node);
 			return Promise.resolve();
 		}
 
-		const selected = this._selectedFile;
-
-		this._selectedFile = undefined;
-		void setContext('gitlens:views:canCompare:file', false);
-
-		return this.compareFileWith(selected.repoPath!, selected.uri!, selected.ref, node.uri, node.ref.ref);
+		return this.compareFileWith(selectedFile.repoPath, selectedFile.uri, selectedFile.ref, node.uri, node.ref.ref);
 	}
-
-	private _selectedFile: CompareSelectedInfo | undefined;
 
 	@command('gitlens.views.selectFileForCompare')
 	@log()
 	private selectFileForCompare(node: ViewRefFileNode) {
 		if (!(node instanceof ViewRefFileNode) || node.ref == null) return;
 
-		this._selectedFile = {
+		void setContext('gitlens:views:canCompare:file', {
 			ref: node.ref.ref,
 			repoPath: node.repoPath,
 			uri: node.uri,
-		};
-		void setContext('gitlens:views:canCompare:file', true);
+		});
 	}
 
 	@command('gitlens.views.openChangedFileDiffs', { args: (n, o) => [n, o] })
@@ -1388,7 +1400,7 @@ export class ViewCommands implements Disposable {
 
 	@command('gitlens.views.openChanges')
 	@log()
-	private openChanges(node: ViewRefFileNode | MergeConflictFileNode | StatusFileNode) {
+	private openChanges(node: ViewRefFileNode | MergeConflictFileNode) {
 		if (node.is('conflict-file')) {
 			void executeCommand<DiffWithCommandArgs>('gitlens.diffWith', {
 				lhs: {
@@ -1407,7 +1419,7 @@ export class ViewCommands implements Disposable {
 			return;
 		}
 
-		if (!(node instanceof ViewRefFileNode) && !node.is('status-file')) return;
+		if (!(node instanceof ViewRefFileNode)) return;
 
 		const command = node.getCommand();
 		if (command?.arguments == null) return;
@@ -1551,24 +1563,18 @@ export class ViewCommands implements Disposable {
 
 	@command('gitlens.views.openChangesWithWorking')
 	@log()
-	private async openChangesWithWorking(node: ViewRefFileNode | MergeConflictFileNode | StatusFileNode) {
-		if (node.is('status-file')) {
+	private async openChangesWithWorking(node: ViewRefFileNode | MergeConflictFileNode) {
+		if (node.isAny('status-file', 'uncommitted-file')) {
 			return executeEditorCommand<DiffWithWorkingCommandArgs>('gitlens.diffWithWorking:views', undefined, {
 				uri: node.uri,
-				showOptions: {
-					preserveFocus: true,
-					preview: true,
-				},
+				showOptions: { preserveFocus: true, preview: true },
 			});
 		}
 
 		if (node.is('conflict-file')) {
 			return executeEditorCommand<DiffWithWorkingCommandArgs>('gitlens.diffWithWorking:views', undefined, {
 				uri: node.baseUri,
-				showOptions: {
-					preserveFocus: true,
-					preview: true,
-				},
+				showOptions: { preserveFocus: true, preview: true },
 			});
 		}
 
@@ -1577,10 +1583,7 @@ export class ViewCommands implements Disposable {
 			if (baseUri != null) {
 				return executeEditorCommand<DiffWithWorkingCommandArgs>('gitlens.diffWithWorking:views', undefined, {
 					uri: baseUri,
-					showOptions: {
-						preserveFocus: true,
-						preview: true,
-					},
+					showOptions: { preserveFocus: true, preview: true },
 				});
 			}
 		}
@@ -1607,21 +1610,24 @@ export class ViewCommands implements Disposable {
 	@command('gitlens.views.openFile')
 	@log()
 	private openFile(
-		node: ViewRefFileNode | MergeConflictFileNode | StatusFileNode | FileHistoryNode | LineHistoryNode,
+		node: ViewRefFileNode | MergeConflictFileNode | FileHistoryNode | LineHistoryNode,
 		options?: TextDocumentShowOptions,
 	) {
-		if (
-			!(node instanceof ViewRefFileNode) &&
-			!node.isAny('conflict-file', 'status-file', 'file-history', 'line-history')
-		) {
+		if (!(node instanceof ViewRefFileNode) && !node.isAny('conflict-file', 'file-history', 'line-history')) {
 			return Promise.resolve();
 		}
 
-		return CommitActions.openFile(node.uri, {
-			preserveFocus: true,
-			preview: false,
-			...options,
-		});
+		return CommitActions.openFile(node.uri, { preserveFocus: true, preview: false, ...options });
+	}
+
+	@command('gitlens.openFileHistoryInGraph:views')
+	@log()
+	private openFileHistoryInGraph(node: CommitFileNode | FileRevisionAsCommitNode | ResultsFileNode | StashFileNode) {
+		if (!node.isAny('commit-file', 'file-commit', 'results-file', 'stash-file')) {
+			return Promise.resolve();
+		}
+
+		return executeCommand('gitlens.openFileHistoryInGraph', node.uri);
 	}
 
 	@command('gitlens.views.openChangedFiles')
@@ -1673,10 +1679,21 @@ export class ViewCommands implements Disposable {
 			| ResultsFileNode
 			| StashFileNode
 			| MergeConflictFileNode
-			| StatusFileNode,
+			| StatusFileNode
+			| UncommittedFileNode,
 		options?: OpenFileAtRevisionCommandArgs,
 	) {
-		if (!node.isAny('commit-file', 'file-commit', 'results-file', 'stash-file', 'conflict-file', 'status-file')) {
+		if (
+			!node.isAny(
+				'commit-file',
+				'file-commit',
+				'results-file',
+				'stash-file',
+				'conflict-file',
+				'status-file',
+				'uncommitted-file',
+			)
+		) {
 			return Promise.resolve();
 		}
 
@@ -1684,7 +1701,7 @@ export class ViewCommands implements Disposable {
 
 		let uri = options.revisionUri;
 		if (uri == null) {
-			if (node.isAny('results-file', 'conflict-file')) {
+			if (node.isAny('results-file', 'conflict-file', 'uncommitted-file')) {
 				uri = this.container.git.getRevisionUriFromGitUri(node.uri);
 			} else {
 				uri =
@@ -1828,12 +1845,6 @@ export class ViewCommands implements Disposable {
 
 		return WorktreeActions.copyChangesToWorktree('working-tree', node.worktree.repoPath, undefined, node.worktree);
 	}
-}
-
-interface CompareSelectedInfo {
-	ref: string;
-	repoPath: string | undefined;
-	uri?: Uri;
 }
 
 export function registerViewCommand(

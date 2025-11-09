@@ -26,7 +26,7 @@ import { telemetryContext } from '../../../shared/contexts/telemetry';
 import type { Disposable } from '../../../shared/events';
 import type { ThemeChangeEvent } from '../../../shared/theme';
 import { onDidChangeTheme } from '../../../shared/theme';
-import { graphStateContext } from '../stateProvider';
+import { graphStateContext } from '../context';
 import type { GlGraph } from './gl-graph';
 import type { GraphWrapperTheming } from './gl-graph.react';
 import './gl-graph';
@@ -132,7 +132,6 @@ export class GlGraphWrapper extends SignalWatcher(LitElement) {
 			.downstreams=${graphState.downstreams}
 			.excludeRefs=${graphState.excludeRefs}
 			.excludeTypes=${graphState.excludeTypes}
-			.filter=${graphState.filter}
 			.includeOnlyRefs=${graphState.includeOnlyRefs}
 			?loading=${graphState.loading}
 			nonce=${ifDefined(graphState.nonce)}
@@ -140,6 +139,8 @@ export class GlGraphWrapper extends SignalWatcher(LitElement) {
 			.refsMetadata=${graphState.refsMetadata}
 			.rows=${graphState.rows}
 			.rowsStats=${graphState.rowsStats}
+			?rowsStatsLoading=${graphState.rowsStatsLoading}
+			.searchMode=${graphState.searchMode}
 			.searchResults=${graphState.searchResults}
 			.selectedRows=${graphState.selectedRows}
 			.theming=${this.theming}

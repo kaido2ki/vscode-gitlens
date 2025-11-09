@@ -21,7 +21,7 @@ export class ActionItem extends LitElement {
 			width: 2rem;
 			height: 2rem;
 			border-radius: 0.5rem;
-			color: var(--vscode-icon-foreground);
+			color: var(--action-item-foreground, var(--vscode-icon-foreground));
 			padding: 0.2rem;
 			vertical-align: text-bottom;
 			text-decoration: none;
@@ -53,9 +53,13 @@ export class ActionItem extends LitElement {
 			justify-content: center;
 			width: 100%;
 			height: 100%;
+			text-decoration: none;
 		}
 		a:focus {
 			outline: none;
+		}
+		a:is(:hover, :focus, :active) {
+			text-decoration: none;
 		}
 	`;
 
@@ -156,7 +160,7 @@ export class ActionItem extends LitElement {
 					tabindex="0"
 					@keydown=${this.handleLinkKeydown}
 				>
-					<code-icon icon="${this.effectiveIcon}"></code-icon>
+					<code-icon part="icon" icon="${this.effectiveIcon}"></code-icon>
 				</a>
 			</gl-tooltip>
 		`;

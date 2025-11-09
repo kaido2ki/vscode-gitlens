@@ -212,7 +212,7 @@ export class PatchDetailsWebviewProvider
 		return [true, undefined];
 	}
 
-	includeBootstrap(): Promise<Serialized<State>> {
+	includeBootstrap(_deferrable?: boolean): Promise<Serialized<State>> {
 		return this.getState(this._context);
 	}
 
@@ -598,7 +598,7 @@ export class PatchDetailsWebviewProvider
 		for (const member of members) {
 			const selection = preserveSelections.get(member.id);
 			// If we have an existing selection, and it's marked for deletion, we need to undo the deletion
-			if (selection != null && selection.change === 'delete') {
+			if (selection?.change === 'delete') {
 				selection.change = undefined;
 			}
 
@@ -1497,7 +1497,7 @@ export class PatchDetailsWebviewProvider
 								`Choose New Base for Patch`,
 								`Choose a new base to apply the patch onto`,
 								{
-									allowRevisions: true,
+									allowedAdditionalInput: { rev: true },
 									include:
 										ReferencesQuickPickIncludes.BranchesAndTags | ReferencesQuickPickIncludes.HEAD,
 								},

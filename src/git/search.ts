@@ -1,25 +1,24 @@
 import type { SearchOperators, SearchOperatorsLongForm, SearchQuery } from '../constants.search';
 import { searchOperators, searchOperatorsToLongFormMap } from '../constants.search';
 import type { StoredSearchQuery } from '../constants.storage';
-import type { Source } from '../constants.telemetry';
-import type { Container } from '../container';
-import type { NaturalLanguageSearchOptions } from '../plus/search/naturalLanguageSearchProcessor';
-import { NaturalLanguageSearchProcessor } from '../plus/search/naturalLanguageSearchProcessor';
+import { some } from '../system/iterable';
 import type { GitRevisionReference } from './models/reference';
 import type { GitUser } from './models/user';
 import { isSha, shortenRevision } from './utils/revision.utils';
 
 export interface GitGraphSearchResultData {
-	date: number;
-	i: number;
+	readonly date: number;
+	readonly i: number;
+	readonly files?: ReadonlyArray<Readonly<{ readonly path: string }>>;
 }
 export type GitGraphSearchResults = Map<string, GitGraphSearchResultData>;
 
 export interface GitGraphSearch {
-	repoPath: string;
-	query: SearchQuery;
-	comparisonKey: string;
-	results: GitGraphSearchResults;
+	readonly repoPath: string;
+	readonly query: SearchQuery;
+	readonly queryFilters: SearchQueryFilters;
+	readonly comparisonKey: string;
+	readonly results: GitGraphSearchResults;
 
 	readonly paging?: {
 		readonly limit: number | undefined;
@@ -67,6 +66,11 @@ export function getSearchQueryComparisonKey(search: SearchQuery | StoredSearchQu
 	}${search.matchRegex ? 'R' : ''}${search.matchWholeWord ? 'W' : ''}${search.naturalLanguage ? 'NL' : ''}`;
 }
 
+export interface ParsedSearchQuery {
+	operations: Map<SearchOperatorsLongForm, Set<string>>;
+	errors?: string[];
+}
+
 export function createSearchQueryForCommit(ref: string): string;
 export function createSearchQueryForCommit(commit: GitRevisionReference): string;
 export function createSearchQueryForCommit(refOrCommit: string | GitRevisionReference): string {
@@ -79,10 +83,11 @@ export function createSearchQueryForCommits(refsOrCommits: (string | GitRevision
 	return refsOrCommits.map(r => `#:${typeof r === 'string' ? shortenRevision(r) : r.name}`).join(' ');
 }
 
-export function parseSearchQuery(search: SearchQuery): Map<SearchOperatorsLongForm, Set<string>> {
+export function parseSearchQuery(search: SearchQuery, validate: boolean = false): ParsedSearchQuery {
 	const operations = new Map<SearchOperatorsLongForm, Set<string>>();
 	const query = search.query.trim();
 
+	let errors: string[] | undefined;
 	let pos = 0;
 
 	while (pos < query.length) {
@@ -163,6 +168,14 @@ export function parseSearchQuery(search: SearchQuery): Map<SearchOperatorsLongFo
 			value = text;
 		}
 
+		// Validate operator has a value
+		if (op && !value) {
+			if (!validate) continue;
+
+			errors ??= [];
+			errors.push(`'${op}' requires a value`);
+		}
+
 		// Add the discovered operation to our map
 		if (op && value) {
 			const longFormOp = searchOperatorsToLongFormMap.get(op);
@@ -177,17 +190,22 @@ export function parseSearchQuery(search: SearchQuery): Map<SearchOperatorsLongFo
 		}
 	}
 
-	return operations;
+	return {
+		operations: operations,
+		...(errors?.length && { errors: errors }),
+	};
 }
 
 export interface SearchQueryFilters {
 	/** Specifies whether the search results will be filtered to specific files */
 	files: boolean;
-	/** Specifies whether the search results will be filtered to a specific type, only `stash` is supported */
-	type?: 'stash';
+	/** Specifies whether the search results will be filtered to a specific type, only `stash` and `tip` are supported */
+	type?: 'stash' | 'tip';
+	/** Specifies whether the search results will be filtered to a specific ref or ref range */
+	refs: boolean;
 }
 
-export interface SearchQueryCommand {
+export interface SearchQueryGitCommand {
 	/** Git log args */
 	args: string[];
 	/** Pathspecs to search, if any */
@@ -196,18 +214,19 @@ export interface SearchQueryCommand {
 	shas?: Set<string> | undefined;
 
 	filters: SearchQueryFilters;
+	operations: Map<SearchOperatorsLongForm, Set<string>>;
 }
 
-export function parseSearchQueryCommand(search: SearchQuery, currentUser: GitUser | undefined): SearchQueryCommand {
-	const operations = parseSearchQuery(search);
+export function parseSearchQueryGitCommand(
+	search: SearchQuery,
+	currentUser: GitUser | undefined,
+): SearchQueryGitCommand {
+	const { operations } = parseSearchQuery(search);
 
 	const searchArgs = new Set<string>();
 	const files: string[] = [];
 	let shas;
-	const filters: SearchQueryFilters = {
-		files: false,
-		type: undefined,
-	};
+	const filters: SearchQueryFilters = { files: false, type: undefined, refs: false };
 
 	let op;
 	let values = operations.get('commit:');
@@ -225,10 +244,6 @@ export function parseSearchQueryCommand(search: SearchQuery, currentUser: GitUse
 		shas = searchArgs;
 	} else {
 		searchArgs.add('--all');
-		searchArgs.add(search.matchRegex ? '--extended-regexp' : '--fixed-strings');
-		if (search.matchRegex && !search.matchCase) {
-			searchArgs.add('--regexp-ignore-case');
-		}
 
 		for ([op, values] of operations.entries()) {
 			switch (op) {
@@ -293,6 +308,8 @@ export function parseSearchQueryCommand(search: SearchQuery, currentUser: GitUse
 						if (value === 'stash') {
 							filters.type = 'stash';
 							searchArgs.add('--no-walk');
+						} else if (value === 'tip') {
+							filters.type = 'tip';
 						}
 					}
 
@@ -355,6 +372,31 @@ export function parseSearchQueryCommand(search: SearchQuery, currentUser: GitUse
 
 					break;
 				}
+
+				case 'ref:':
+					for (let value of values) {
+						if (!value) continue;
+
+						if (value.startsWith('"') && value.endsWith('"')) {
+							value = value.slice(1, -1);
+							if (!value) continue;
+						}
+
+						filters.refs = true;
+						// Replace --all with the specific ref or ref range
+						searchArgs.delete('--all');
+						searchArgs.add(value);
+					}
+
+					break;
+			}
+		}
+
+		// Add regex/string matching flags if we have (--grep, --author) patterns
+		if (some(searchArgs.values(), arg => arg.startsWith('--grep=') || arg.startsWith('--author='))) {
+			searchArgs.add(search.matchRegex ? '--extended-regexp' : '--fixed-strings');
+			if (search.matchRegex && !search.matchCase) {
+				searchArgs.add('--regexp-ignore-case');
 			}
 		}
 	}
@@ -364,15 +406,103 @@ export function parseSearchQueryCommand(search: SearchQuery, currentUser: GitUse
 		files: files,
 		shas: shas,
 		filters: filters,
+		operations: operations,
 	};
 }
 
-/** Converts natural language to a structured search query */
-export async function processNaturalLanguageToSearchQuery(
-	container: Container,
+export interface SearchQueryGitHubCommand {
+	/** Query args */
+	args: string[];
+
+	filters: SearchQueryFilters;
+	operations: Map<SearchOperatorsLongForm, Set<string>>;
+}
+
+export function parseSearchQueryGitHubCommand(
 	search: SearchQuery,
-	source: Source,
-	options?: NaturalLanguageSearchOptions,
-): Promise<SearchQuery> {
-	return new NaturalLanguageSearchProcessor(container).processNaturalLanguageToSearchQuery(search, source, options);
+	currentUser: GitUser | undefined,
+): SearchQueryGitHubCommand {
+	const { operations } = parseSearchQuery(search);
+
+	const queryArgs = [];
+	const filters: SearchQueryFilters = { files: false, type: undefined, refs: false };
+
+	for (const [op, values] of operations.entries()) {
+		switch (op) {
+			case 'message:':
+				for (let value of values) {
+					if (!value) continue;
+
+					if (value.startsWith('"') && value.endsWith('"')) {
+						value = value.slice(1, -1);
+						if (!value) continue;
+					}
+
+					if (search.matchWholeWord && search.matchRegex) {
+						value = `\\b${value}\\b`;
+					}
+
+					queryArgs.push(value.replace(/ /g, '+'));
+				}
+				break;
+
+			case 'author:': {
+				for (let value of values) {
+					if (!value) continue;
+
+					if (value.startsWith('"') && value.endsWith('"')) {
+						value = value.slice(1, -1);
+						if (!value) continue;
+					}
+
+					if (value === '@me') {
+						if (!currentUser?.name) continue;
+
+						value = `@${currentUser.username}`;
+					}
+
+					value = value.replace(/ /g, '+');
+					if (value.startsWith('@')) {
+						value = value.slice(1);
+						queryArgs.push(`author:${value.slice(1)}`);
+					} else if (value.includes('@')) {
+						queryArgs.push(`author-email:${value}`);
+					} else {
+						queryArgs.push(`author-name:${value}`);
+					}
+				}
+
+				break;
+			}
+
+			case 'type:':
+			case 'file:':
+			case 'change:':
+			case 'ref:':
+				// Not supported in GitHub search
+				break;
+
+			case 'after:':
+			case 'before:': {
+				const flag = op === 'after:' ? 'author-date:>' : 'author-date:<';
+
+				for (let value of values) {
+					if (!value) continue;
+
+					if (value.startsWith('"') && value.endsWith('"')) {
+						value = value.slice(1, -1);
+						if (!value) continue;
+					}
+
+					// if value is YYYY-MM-DD then include it, otherwise we can't use it
+					if (!/^\d{4}-\d{2}-\d{2}$/.test(value)) {
+						queryArgs.push(`${flag}${value}`);
+					}
+				}
+				break;
+			}
+		}
+	}
+
+	return { args: queryArgs, filters: filters, operations: operations };
 }

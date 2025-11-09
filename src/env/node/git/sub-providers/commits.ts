@@ -6,7 +6,6 @@ import { CancellationError, isCancellationError } from '../../../../errors';
 import type { GitCache } from '../../../../git/cache';
 import type { GitCommandOptions } from '../../../../git/commandOptions';
 import { GitErrorHandling } from '../../../../git/commandOptions';
-import { CherryPickError, CherryPickErrorReason } from '../../../../git/errors';
 import type {
 	GitCommitsSubProvider,
 	GitLogForPathOptions,
@@ -37,27 +36,28 @@ import type {
 } from '../../../../git/parsers/logParser';
 import {
 	getCommitsLogParser,
-	getShaAndDatesLogParser,
 	getShaAndFilesAndStatsLogParser,
 	getShaLogParser,
 } from '../../../../git/parsers/logParser';
 import { parseGitRefLog, parseGitRefLogDefaultFormat } from '../../../../git/parsers/reflogParser';
 import type { SearchQueryFilters } from '../../../../git/search';
-import { parseSearchQueryCommand, processNaturalLanguageToSearchQuery } from '../../../../git/search';
+import { parseSearchQueryGitCommand } from '../../../../git/search';
+import { processNaturalLanguageToSearchQuery } from '../../../../git/search.naturalLanguage';
 import { createUncommittedChangesCommit } from '../../../../git/utils/-webview/commit.utils';
 import { isRevisionRange, isSha, isUncommitted, isUncommittedStaged } from '../../../../git/utils/revision.utils';
 import { isUserMatch } from '../../../../git/utils/user.utils';
 import { configuration } from '../../../../system/-webview/configuration';
 import { splitPath } from '../../../../system/-webview/path';
-import { log } from '../../../../system/decorators/log';
+import { debug, log } from '../../../../system/decorators/log';
 import { filterMap, first, join, last, some } from '../../../../system/iterable';
 import { Logger } from '../../../../system/logger';
 import { getLogScope } from '../../../../system/logger.scope';
 import { isFolderGlob, stripFolderGlob } from '../../../../system/path';
+import { maybeStopWatch } from '../../../../system/stopwatch';
 import type { CachedLog, TrackedGitDocument } from '../../../../trackers/trackedDocument';
 import { GitDocumentState } from '../../../../trackers/trackedDocument';
 import type { Git, GitResult } from '../git';
-import { gitConfigsLog, gitConfigsLogWithFiles, GitErrors } from '../git';
+import { gitConfigsLog, gitConfigsLogWithFiles } from '../git';
 import type { LocalGitProviderInternal } from '../localGitProvider';
 import { convertStashesToStdin } from './stash';
 
@@ -74,63 +74,6 @@ export class CommitsGitSubProvider implements GitCommitsSubProvider {
 
 	private get useCaching() {
 		return configuration.get('advanced.caching.enabled');
-	}
-
-	@log()
-	async cherryPick(
-		repoPath: string,
-		revs: string[],
-		options?: { edit?: boolean; noCommit?: boolean },
-	): Promise<void> {
-		const args = ['cherry-pick'];
-		if (options?.edit) {
-			args.push('-e');
-		}
-		if (options?.noCommit) {
-			args.push('-n');
-		}
-
-		if (revs.length > 1) {
-			const parser = getShaAndDatesLogParser();
-			// Ensure the revs are in reverse committer date order
-			const result = await this.git.exec(
-				{ cwd: repoPath, stdin: join(revs, '\n') },
-				'log',
-				'--no-walk',
-				'--stdin',
-				...parser.arguments,
-				'--',
-			);
-			const commits = [...parser.parse(result.stdout)].sort(
-				(c1, c2) =>
-					Number(c1.committerDate) - Number(c2.committerDate) ||
-					Number(c1.authorDate) - Number(c2.authorDate),
-			);
-			revs = commits.map(c => c.sha);
-		}
-
-		args.push(...revs);
-
-		try {
-			await this.git.exec({ cwd: repoPath, errors: GitErrorHandling.Throw }, ...args);
-		} catch (ex) {
-			const msg: string = ex?.toString() ?? '';
-
-			let reason: CherryPickErrorReason = CherryPickErrorReason.Other;
-			if (
-				GitErrors.changesWouldBeOverwritten.test(msg) ||
-				GitErrors.changesWouldBeOverwritten.test(ex.stderr ?? '')
-			) {
-				reason = CherryPickErrorReason.AbortedWouldOverwrite;
-			} else if (GitErrors.conflict.test(msg) || GitErrors.conflict.test(ex.stdout ?? '')) {
-				reason = CherryPickErrorReason.Conflicts;
-			} else if (GitErrors.emptyPreviousCherryPick.test(msg)) {
-				reason = CherryPickErrorReason.EmptyCommit;
-			}
-
-			debugger;
-			throw new CherryPickError(reason, ex, revs);
-		}
 	}
 
 	@log()
@@ -380,6 +323,7 @@ export class CommitsGitSubProvider implements GitCommitsSubProvider {
 		return this.getLogCore(repoPath, rev, options, cancellation);
 	}
 
+	@debug({ args: { 2: false, 3: false, 4: false }, exit: true })
 	private async getLogCore(
 		repoPath: string,
 		rev?: string | undefined,
@@ -563,7 +507,7 @@ export class CommitsGitSubProvider implements GitCommitsSubProvider {
 			const log: GitLog = {
 				repoPath: repoPath,
 				commits: commits,
-				sha: rev,
+				sha: isRevisionRange(rev) ? undefined : rev,
 				count: commits.size,
 				limit: limit,
 				hasMore: overrideHasMore ?? count - countStashChildCommits > commits.size,
@@ -1067,9 +1011,9 @@ export class CommitsGitSubProvider implements GitCommitsSubProvider {
 	@log<CommitsGitSubProvider['searchCommits']>({
 		args: {
 			1: s =>
-				`[${s.matchAll ? 'A' : ''}${s.matchCase ? 'C' : ''}${s.matchRegex ? 'R' : ''}${s.matchWholeWord ? 'W' : ''}]: ${
-					s.query.length > 500 ? `${s.query.substring(0, 500)}...` : s.query
-				}`,
+				`[${s.matchAll ? 'A' : ''}${s.matchCase ? 'C' : ''}${s.matchRegex ? 'R' : ''}${
+					s.matchWholeWord ? 'W' : ''
+				}]: ${s.query.length > 500 ? `${s.query.substring(0, 500)}...` : s.query}`,
 		},
 	})
 	async searchCommits(
@@ -1098,13 +1042,12 @@ export class CommitsGitSubProvider implements GitCommitsSubProvider {
 			const similarityThreshold = configuration.get('advanced.similarityThreshold');
 			const args = [
 				'log',
-
 				...parser.arguments,
 				`-M${similarityThreshold == null ? '' : `${similarityThreshold}%`}`,
 				'--use-mailmap',
 			];
 
-			const { args: searchArgs, files, shas, filters } = parseSearchQueryCommand(search, currentUser);
+			const { args: searchArgs, files, shas, filters } = parseSearchQueryGitCommand(search, currentUser);
 
 			let stashes: Map<string, GitStashCommit> | undefined;
 			let stdin: string | undefined;
@@ -1112,7 +1055,8 @@ export class CommitsGitSubProvider implements GitCommitsSubProvider {
 			if (shas?.size) {
 				stdin = join(shas, '\n');
 				args.push('--no-walk');
-			} else {
+			} else if (!filters.refs) {
+				// Don't include stashes when using ref: filter, as they would add unrelated commits
 				// TODO@eamodio this is insanity -- there *HAS* to be a better way to get git log to return stashes
 				({ stdin, stashes } = convertStashesToStdin(
 					await this.provider.stash?.getStash(repoPath, undefined, cancellation),
@@ -1323,14 +1267,21 @@ async function parseCommits(
 	let countStashChildCommits = 0;
 	const commits = new Map<string, GitCommit>();
 
+	const tipsOnly = searchFilters?.type === 'tip';
+
 	if (resultOrStream instanceof Promise) {
 		const result = await resultOrStream;
+
+		const scope = getLogScope();
+		using sw = maybeStopWatch(scope, { log: false, logLevel: 'debug' });
 
 		if (stashes?.size) {
 			const allowFilteredFiles = searchFilters?.files ?? false;
 			const stashesOnly = searchFilters?.type === 'stash';
+
 			for (const c of parser.parse(result.stdout)) {
 				if (stashesOnly && !stashes?.has(c.sha)) continue;
+				if (tipsOnly && !c.tips) continue;
 
 				count++;
 				if (limit && count > limit) break;
@@ -1360,6 +1311,8 @@ async function parseCommits(
 			}
 		} else {
 			for (const c of parser.parse(result.stdout)) {
+				if (tipsOnly && !c.tips) continue;
+
 				count++;
 				if (limit && count > limit) break;
 
@@ -1367,14 +1320,18 @@ async function parseCommits(
 			}
 		}
 
+		sw?.stop({ suffix: ` created ${count} commits` });
+
 		return { commits: commits, count: count, countStashChildCommits: countStashChildCommits };
 	}
 
 	if (stashes?.size) {
 		const allowFilteredFiles = searchFilters?.files ?? false;
 		const stashesOnly = searchFilters?.type === 'stash';
+
 		for await (const c of parser.parseAsync(resultOrStream)) {
 			if (stashesOnly && !stashes?.has(c.sha)) continue;
+			if (tipsOnly && !c.tips) continue;
 
 			count++;
 			if (limit && count > limit) break;
@@ -1404,6 +1361,8 @@ async function parseCommits(
 		}
 	} else {
 		for await (const c of parser.parseAsync(resultOrStream)) {
+			if (tipsOnly && !c.tips) continue;
+
 			count++;
 			if (limit && count > limit) break;
 

@@ -50,7 +50,7 @@ import {
 	isTagReference,
 } from '../git/utils/reference.utils';
 import { getHighlanderProviderName } from '../git/utils/remote.utils';
-import { createRevisionRange, isRevisionRange } from '../git/utils/revision.utils';
+import { createRevisionRange, getRevisionRangeParts, isRevisionRange, isSha } from '../git/utils/revision.utils';
 import { getSubscriptionNextPaidPlanId, isSubscriptionPaidPlan } from '../plus/gk/utils/subscription.utils';
 import type { LaunchpadCommandArgs } from '../plus/launchpad/launchpad';
 import {
@@ -262,10 +262,10 @@ export async function getWorktrees(
 				if ((excludeOpened && w.opened) || filter?.(w) === false) return undefined;
 
 				let missing = false;
-				let status;
+				let hasChanges;
 				if (includeStatus) {
 					try {
-						status = await w.getStatus();
+						hasChanges = await w.hasWorkingChanges();
 					} catch (ex) {
 						Logger.error(ex, `Worktree status failed: ${w.uri.toString(true)}`);
 						missing = true;
@@ -277,12 +277,7 @@ export async function getWorktrees(
 					picked != null &&
 						(typeof picked === 'string' ? w.uri.toString() === picked : picked.includes(w.uri.toString())),
 					missing,
-					{
-						buttons: buttons,
-						includeStatus: includeStatus,
-						path: true,
-						status: status,
-					},
+					{ buttons: buttons, hasChanges: hasChanges, includeStatus: includeStatus, path: true },
 				);
 			}),
 		),
@@ -498,15 +493,12 @@ export async function getBranchesAndOrTags(
 
 export function getValidateGitReferenceFn(
 	repos: Repository | Repository[] | undefined,
-	options?: { buttons?: QuickInputButton[]; ranges?: boolean },
+	options?: {
+		revs?: { allow: boolean; buttons?: QuickInputButton[] };
+		ranges?: { allow: boolean; buttons?: QuickInputButton[]; validate?: boolean };
+	},
 ) {
 	return async (quickpick: QuickPick<any>, value: string): Promise<boolean> => {
-		let inRefMode = false;
-		if (value.startsWith('#')) {
-			inRefMode = true;
-			value = value.substring(1);
-		}
-
 		if (repos == null) return false;
 		if (Array.isArray(repos)) {
 			if (repos.length !== 1) return false;
@@ -514,11 +506,35 @@ export function getValidateGitReferenceFn(
 			repos = repos[0];
 		}
 
-		if (inRefMode && options?.ranges && isRevisionRange(value)) {
+		let allowRevs = false;
+		if (value.startsWith('#')) {
+			allowRevs = options?.revs?.allow ?? true;
+			value = value.substring(1);
+		} else if (isSha(value)) {
+			allowRevs = options?.revs?.allow ?? true;
+		}
+
+		if (options?.ranges?.allow && isRevisionRange(value)) {
+			if (options?.ranges?.validate) {
+				// Validate the parts of the range
+				const parts = getRevisionRangeParts(value);
+				const [leftResult, rightResult] = await Promise.allSettled([
+					parts?.left != null ? repos.git.refs.isValidReference(parts.left) : Promise.resolve(true),
+					parts?.right != null ? repos.git.refs.isValidReference(parts.right) : Promise.resolve(true),
+				]);
+
+				if (!getSettledValue(leftResult, false) || !getSettledValue(rightResult, false)) {
+					quickpick.items = [
+						createDirectiveQuickPickItem(Directive.Noop, true, { label: `Invalid Range: ${value}` }),
+					];
+					return true;
+				}
+			}
+
 			quickpick.items = [
 				createRefQuickPickItem(value, repos.path, true, {
 					alwaysShow: true,
-					buttons: options?.buttons,
+					buttons: options?.ranges?.buttons,
 					ref: false,
 					icon: false,
 				}),
@@ -527,9 +543,9 @@ export function getValidateGitReferenceFn(
 		}
 
 		if (!(await repos.git.refs.isValidReference(value))) {
-			if (inRefMode) {
+			if (allowRevs) {
 				quickpick.items = [
-					createDirectiveQuickPickItem(Directive.Back, true, {
+					createDirectiveQuickPickItem(Directive.Noop, true, {
 						label: 'Enter a reference or commit SHA',
 					}),
 				];
@@ -539,7 +555,7 @@ export function getValidateGitReferenceFn(
 			return false;
 		}
 
-		if (!inRefMode) {
+		if (!allowRevs) {
 			if (
 				await repos.git.refs.hasBranchOrTag({
 					filter: { branches: b => b.name.includes(value), tags: t => t.name.includes(value) },
@@ -553,7 +569,7 @@ export function getValidateGitReferenceFn(
 		quickpick.items = [
 			await createCommitQuickPickItem(commit!, true, {
 				alwaysShow: true,
-				buttons: options?.buttons,
+				buttons: options?.revs?.buttons,
 				compact: true,
 				icon: 'avatar',
 			}),
@@ -1033,7 +1049,10 @@ export function* pickBranchOrTagStep<
 				void showCommitInDetailsView(item, { pin: false, preserveFocus: true });
 			}
 		},
-		onValidateValue: getValidateGitReferenceFn(state.repo, { ranges: ranges }),
+		onValidateValue: getValidateGitReferenceFn(
+			state.repo,
+			ranges ? { ranges: { allow: true, validate: true } } : undefined,
+		),
 	});
 
 	const selection: StepSelection<typeof step> = yield step;
@@ -1312,7 +1331,7 @@ export async function* pickCommitStep<
 			}
 		},
 		onValidateValue: getValidateGitReferenceFn(state.repo, {
-			buttons: [ShowDetailsViewQuickInputButton, RevealInSideBarQuickInputButton],
+			revs: { allow: true, buttons: [ShowDetailsViewQuickInputButton, RevealInSideBarQuickInputButton] },
 		}),
 	});
 

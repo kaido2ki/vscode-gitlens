@@ -3,7 +3,6 @@ import type { ConfigurationChangeEvent, Event, Uri, WorkspaceFolder } from 'vsco
 import { Disposable, EventEmitter, ProgressLocation, RelativePattern, window, workspace } from 'vscode';
 import { md5, uuid } from '@env/crypto';
 import type { CreatePullRequestActionContext } from '../../api/gitlens';
-import { Schemes } from '../../constants';
 import type { Container } from '../../container';
 import type { FeatureAccess, PlusFeatures } from '../../features';
 import { showCreatePullRequestPrompt, showGenericErrorMessage } from '../../messages';
@@ -21,11 +20,12 @@ import type { Deferrable } from '../../system/function/debounce';
 import { debounce } from '../../system/function/debounce';
 import { filter, groupByMap, join, map, min, some } from '../../system/iterable';
 import { getLoggableName, Logger } from '../../system/logger';
-import { getLogScope, startLogScope } from '../../system/logger.scope';
+import { getLogScope, setLogScopeExit, startLogScope } from '../../system/logger.scope';
 import { updateRecordValue } from '../../system/object';
-import { basename, normalizePath } from '../../system/path';
+import { basename } from '../../system/path';
 import type { GitDir, GitProviderDescriptor } from '../gitProvider';
 import type { GitRepositoryService } from '../gitRepositoryService';
+import { getRepositoryOrWorktreePath } from '../utils/-webview/repository.utils';
 import { getBranchNameWithoutRemote, getRemoteNameFromBranchName } from '../utils/branch.utils';
 import { getReferenceNameWithoutRemote, isBranchReference } from '../utils/reference.utils';
 import type { GitBranch } from './branch';
@@ -191,7 +191,6 @@ export class Repository implements Disposable {
 		public readonly folder: WorkspaceFolder | undefined,
 		public readonly uri: Uri,
 		public readonly root: boolean,
-		suspended: boolean,
 		closed: boolean = false,
 	) {
 		if (folder != null) {
@@ -227,7 +226,7 @@ export class Repository implements Disposable {
 
 		this.id = asRepoComparisonKey(uri);
 
-		this._suspended = suspended;
+		this._suspended = !window.state.focused;
 		this._closed = closed;
 
 		this._disposable = Disposable.from(
@@ -275,7 +274,14 @@ export class Repository implements Disposable {
 			using scope = startLogScope(`${getLoggableName(this)}.closed`, false);
 			Logger.debug(scope, `setting closed=${value}`);
 			void this.getGitDir().then(gd => this.setupRepoWatchers(gd));
-			this.fireChange(this._closed ? RepositoryChange.Closed : RepositoryChange.Opened);
+
+			if (this._closed) {
+				// When closing, fire the event immediately even if suspended
+				// This ensures views can clean up nodes for closed repositories before VS Code tries to render them
+				this.fireChange(RepositoryChange.Closed, true);
+			} else {
+				this.fireChange(RepositoryChange.Opened);
+			}
 		}
 	}
 
@@ -289,7 +295,7 @@ export class Repository implements Disposable {
 	}
 
 	get path(): string {
-		return this.uri.scheme === Schemes.File ? normalizePath(this.uri.fsPath) : this.uri.toString();
+		return getRepositoryOrWorktreePath(this.uri);
 	}
 
 	private _orderByLastFetched = false;
@@ -507,7 +513,7 @@ export class Repository implements Disposable {
 		remote?: string;
 	}) {
 		try {
-			await this.git.fetch(options);
+			await this.git.ops?.fetch(options);
 
 			this.fireChange(RepositoryChange.Unknown);
 		} catch (ex) {
@@ -587,10 +593,10 @@ export class Repository implements Disposable {
 		try {
 			const withTags = configuration.getCore('git.pullTags', this.uri);
 			if (configuration.getCore('git.fetchOnPull', this.uri)) {
-				await this.git.fetch();
+				await this.git.ops?.fetch();
 			}
 
-			await this.git.pull({ ...options, tags: withTags });
+			await this.git.ops?.pull({ ...options, tags: withTags });
 
 			this.fireChange(RepositoryChange.Unknown);
 		} catch (ex) {
@@ -654,7 +660,7 @@ export class Repository implements Disposable {
 
 	private async pushCore(options?: { force?: boolean; reference?: GitReference; publish?: { remote: string } }) {
 		try {
-			await this.git.push({
+			await this.git.ops?.push({
 				reference: options?.reference,
 				force: options?.force,
 				publish: options?.publish,
@@ -679,18 +685,26 @@ export class Repository implements Disposable {
 		);
 	}
 
+	@debug({ singleLine: true })
 	resume(): void {
-		if (!this._suspended) return;
+		const scope = getLogScope();
+
+		if (!this._suspended) {
+			setLogScopeExit(scope, ' \u2022 ignored; not suspended');
+			return;
+		}
 
 		this._suspended = false;
 
 		// If we've come back into focus and we are dirty, fire the change events
 
 		if (this._pendingRepoChange != null) {
-			this._fireChangeDebounced!();
+			Logger.debug(scope, `Firing pending repo ${this._pendingRepoChange.toString(true)}`);
+			this._fireChangeDebounced?.();
 		}
 
 		if (this._pendingFileSystemChange != null) {
+			Logger.debug(scope, `Firing pending file system changes`);
 			this._fireFileSystemChangeDebounced?.();
 		}
 	}
@@ -702,9 +716,10 @@ export class Repository implements Disposable {
 
 	get starred(): boolean {
 		const starred = this.container.storage.getWorkspace('starred:repositories');
-		return starred != null && starred[this.id] === true;
+		return starred?.[this.id] === true;
 	}
 
+	@log<Repository['star']>({ args: { 0: b => b?.name } })
 	star(branch?: GitBranch): Promise<void> {
 		return this.updateStarred(true, branch);
 	}
@@ -727,7 +742,7 @@ export class Repository implements Disposable {
 
 	private async switchCore(ref: string, options?: { createBranch?: string }) {
 		try {
-			await this.git.checkout(ref, options);
+			await this.git.ops?.checkout(ref, options);
 
 			this.fireChange(RepositoryChange.Unknown);
 		} catch (ex) {
@@ -743,6 +758,7 @@ export class Repository implements Disposable {
 		return rev != null ? this.git.getBestRevisionUri(path, rev) : undefined;
 	}
 
+	@log<Repository['unstar']>({ args: { 0: b => b?.name } })
 	unstar(branch?: GitBranch): Promise<void> {
 		return this.updateStarred(false, branch);
 	}
@@ -771,46 +787,45 @@ export class Repository implements Disposable {
 		return this._etagFileSystem;
 	}
 
+	@debug({ singleLine: true })
 	suspend(): void {
 		this._suspended = true;
 	}
 
 	waitForRepoChange(timeoutMs: number): Promise<boolean> {
-		return new Promise<boolean>(resolve => {
-			let timeoutId: NodeJS.Timeout | undefined;
-			let listener: Disposable | undefined;
+		let timeoutId: NodeJS.Timeout | undefined;
+		let listener: Disposable | undefined;
 
-			const cleanup = () => {
-				if (timeoutId != null) {
-					clearTimeout(timeoutId);
-					timeoutId = undefined;
-				}
-				listener?.dispose();
-				listener = undefined;
-			};
+		const cleanup = () => {
+			if (timeoutId != null) {
+				clearTimeout(timeoutId);
+				timeoutId = undefined;
+			}
+			listener?.dispose();
+			listener = undefined;
+		};
 
-			const timeoutPromise = new Promise<false>(r => {
+		return Promise.race([
+			new Promise<false>(r => {
 				timeoutId = setTimeout(() => {
 					cleanup();
 					r(false);
 				}, timeoutMs);
-			});
-
-			const changePromise = new Promise<true>(r => {
+			}),
+			new Promise<true>(r => {
 				listener = this.onDidChange(() => {
 					cleanup();
 					r(true);
 				});
-			});
-
-			void Promise.race([timeoutPromise, changePromise]).then(result => resolve(result));
-		});
+			}),
+		]);
 	}
 
 	private _fsWatcherDisposable: Disposable | undefined;
 	private _fsWatchers = new Map<string, number>();
 	private _fsChangeDelay: number = defaultFileSystemChangeDelay;
 
+	@debug({ singleLine: true })
 	watchFileSystem(delay: number = defaultFileSystemChangeDelay): Disposable {
 		const id = uuid();
 		this._fsWatchers.set(id, delay);
@@ -857,21 +872,40 @@ export class Repository implements Disposable {
 		this._fireFileSystemChangeDebounced = undefined;
 	}
 
+	private fireChange(...changes: RepositoryChange[]): void;
+	private fireChange(change: RepositoryChange, force: boolean): void;
 	@debug()
-	private fireChange(...changes: RepositoryChange[]) {
+	private fireChange(...args: RepositoryChange[] | [RepositoryChange, boolean]): void {
 		const scope = getLogScope();
+
+		// Extract force flag if present (last argument is boolean)
+		const lastArg = args[args.length - 1];
+		const force = typeof lastArg === 'boolean' ? lastArg : false;
+		const changes = (force ? args.slice(0, -1) : args) as RepositoryChange[];
 
 		this._updatedAt = Date.now();
 
-		this._fireChangeDebounced ??= debounce(this.fireChangeCore.bind(this), defaultRepositoryChangeDelay);
+		if (force) {
+			// Cancel any pending debounced fire and clear the queue
+			this._fireChangeDebounced?.cancel();
+			this._fireChangeDebounced = undefined;
 
+			// Set the pending change and fire immediately, bypassing suspension
+			this._pendingRepoChange = new RepositoryChangeEvent(this, changes);
+
+			this.providerService.onRepositoryChanged(this, this._pendingRepoChange);
+			this.fireChangeCore();
+
+			return;
+		}
+
+		this._fireChangeDebounced ??= debounce(this.fireChangeCore.bind(this), defaultRepositoryChangeDelay);
 		this._pendingRepoChange = this._pendingRepoChange?.with(changes) ?? new RepositoryChangeEvent(this, changes);
 
 		this.providerService.onRepositoryChanged(this, this._pendingRepoChange);
 
 		if (this._suspended) {
-			Logger.debug(scope, `queueing suspended ${this._pendingRepoChange.toString(true)}`);
-
+			Logger.debug(scope, `SUSPENDED: queueing repo ${this._pendingRepoChange.toString(true)}`);
 			return;
 		}
 
@@ -879,13 +913,17 @@ export class Repository implements Disposable {
 	}
 
 	private fireChangeCore() {
+		using scope = startLogScope(`${getLoggableName(this)}.fireChangeCore`, false);
+
 		const e = this._pendingRepoChange;
-		if (e == null) return;
+		if (e == null) {
+			Logger.debug(scope, 'No pending repo changes');
+			return;
+		}
 
 		this._pendingRepoChange = undefined;
 
-		using scope = startLogScope(`${getLoggableName(this)}.fireChangeCore`, false);
-		Logger.debug(scope, `firing ${e.toString(true)}`);
+		Logger.debug(scope, `firing repo ${e.toString(true)}`);
 		try {
 			this._onDidChange.fire(e);
 		} finally {
@@ -908,7 +946,7 @@ export class Repository implements Disposable {
 		if (this._suspended) {
 			Logger.debug(
 				scope,
-				`queueing suspended fs changes=${join(
+				`SUSPENDED: queueing fs changes=${join(
 					map(e.uris, u => u.fsPath),
 					', ',
 				)}`,
@@ -920,19 +958,26 @@ export class Repository implements Disposable {
 	}
 
 	private async fireFileSystemChangeCore() {
+		using scope = startLogScope(`${getLoggableName(this)}.fireFileSystemChangeCore`, false);
+
 		let e = this._pendingFileSystemChange;
-		if (e == null) return;
+		if (e == null) {
+			Logger.debug(scope, 'No pending fs changes');
+			return;
+		}
 
 		this._pendingFileSystemChange = undefined;
 
 		const uris = await this.git.excludeIgnoredUris([...e.uris]);
-		if (!uris.length) return;
+		if (!uris.length) {
+			Logger.debug(scope, 'No non-ignored fs changes');
+			return;
+		}
 
 		if (uris.length !== e.uris.size) {
 			e = { ...e, uris: new UriSet(uris) };
 		}
 
-		using scope = startLogScope(`${getLoggableName(this)}.fireFileSystemChangeCore`, false);
 		Logger.debug(
 			scope,
 			`firing fs changes=${join(

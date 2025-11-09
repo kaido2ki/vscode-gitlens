@@ -51,8 +51,14 @@ export class GlTreeItem extends GlElement {
 	@property({ type: Boolean })
 	showIcon = true;
 
+	@property({ type: Boolean, reflect: true })
+	matched = false;
+
 	@property({ type: Number })
 	override tabIndex = -1;
+
+	@property({ type: String, attribute: 'vscode-context' })
+	vscodeContext?: string;
 
 	// state
 	@state()
@@ -183,6 +189,7 @@ export class GlTreeItem extends GlElement {
 				tabindex=${this.tabIndex}
 				@click=${this.onButtonClick}
 				@dblclick=${this.onButtonDblClick}
+				@contextmenu=${this.onButtonContextMenu}
 			>
 				${when(this.showIcon, () => html`<slot name="icon" class="icon"></slot>`)}
 				<span class="text">
@@ -242,6 +249,29 @@ export class GlTreeItem extends GlElement {
 			ctrlKey: e.ctrlKey,
 			metaKey: e.metaKey,
 		});
+	}
+
+	private onButtonContextMenu(e: MouseEvent) {
+		e.preventDefault();
+		e.stopPropagation();
+
+		// Create a new contextmenu event that can cross shadow DOM boundaries
+		const evt = new MouseEvent('contextmenu', {
+			bubbles: true,
+			composed: true, // This is key - allows event to cross shadow DOM boundaries
+			cancelable: true,
+			clientX: e.clientX,
+			clientY: e.clientY,
+			button: e.button,
+			buttons: e.buttons,
+			ctrlKey: e.ctrlKey,
+			shiftKey: e.shiftKey,
+			altKey: e.altKey,
+			metaKey: e.metaKey,
+		});
+
+		// Dispatch from the host element (outside shadow DOM)
+		this.dispatchEvent(evt);
 	}
 
 	private onCheckboxClick(e: Event) {

@@ -34,6 +34,7 @@ import {
 } from '../../../git/errors';
 import type { GitDir } from '../../../git/gitProvider';
 import type { GitDiffFilter } from '../../../git/models/diff';
+import { rootSha } from '../../../git/models/revision';
 import { parseGitRemoteUrl } from '../../../git/parsers/remoteParser';
 import { isUncommitted, isUncommittedStaged, shortenRevision } from '../../../git/utils/revision.utils';
 import { getCancellationTokenId } from '../../../system/-webview/cancellation';
@@ -68,9 +69,6 @@ export const gitConfigsStatus = ['-c', 'color.status=false'] as const;
 export const maxGitCliLength = 30000;
 
 const textDecoder = new TextDecoder('utf8');
-
-// This is a root sha of all git repo's if using sha1
-const rootSha = '4b825dc642cb6eb9a060e54bf8d69288fbee4904';
 
 export const GitErrors = {
 	alreadyCheckedOut: /already checked out/i,
@@ -247,7 +245,7 @@ export class Git implements Disposable {
 	/** Map of running git commands -- avoids running duplicate overlapping commands */
 	private readonly pendingCommands = new Map<string, Promise<RunResult<string | Buffer>>>();
 
-	constructor(container: Container) {
+	constructor(private readonly container: Container) {
 		this._disposable = container.events.on('git:cache:reset', e => {
 			// Ignore provider resets (e.g. it needs to be git specific)
 			if (e.data.types?.every(t => t === 'providers')) return;
@@ -349,6 +347,26 @@ export class Git implements Disposable {
 				exitCode: result.exitCode ?? 0,
 			};
 		} catch (ex) {
+			if (ex instanceof CancelledRunError) {
+				const duration = getDurationMilliseconds(start);
+				const timeout = runOpts.timeout ?? 0;
+				const reason =
+					timeout > 0 && duration >= timeout - 100
+						? 'timeout'
+						: cancellation?.isCancellationRequested
+							? 'cancellation'
+							: 'unknown';
+				Logger.warn(
+					`${getLoggableScopeBlockOverride('GIT')} ${gitCommand} ${GlyphChars.Dot} ABORTED after ${duration}ms (${reason})`,
+				);
+				this.container.telemetry.sendEvent('op/git/aborted', {
+					operation: gitCommand,
+					reason: reason,
+					duration: duration,
+					timeout: timeout,
+				});
+			}
+
 			if (errorHandling === GitErrorHandling.Ignore) {
 				if (ex instanceof RunError) {
 					return {
@@ -515,7 +533,11 @@ export class Git implements Disposable {
 					}
 				}
 			} finally {
-				// I have NO idea why this HAS to be in a finally block, but it does
+				// This await MUST be in this inner finally block to ensure the child process close event completes
+				// before we call removeAllListeners() in the outer finally. When consumers break early from the
+				// async generator (e.g., reading only the first chunk), the git process receives SIGPIPE and triggers
+				// the close handler asynchronously. Without awaiting here, removeAllListeners() would execute before
+				// the close handler finishes, causing a race condition and potential resource leaks.
 				await promise;
 			}
 		} catch (ex) {
@@ -1153,18 +1175,15 @@ export class Git implements Disposable {
 	async reset(
 		repoPath: string,
 		pathspecs: string[],
-		options?: { hard?: boolean; soft?: never; ref?: string } | { soft?: boolean; hard?: never; ref?: string },
+		options?: { mode?: 'hard' | 'keep' | 'merge' | 'mixed' | 'soft'; rev?: string },
 	): Promise<void> {
 		try {
 			const flags = [];
-			if (options?.hard) {
-				flags.push('--hard');
-			} else if (options?.soft) {
-				flags.push('--soft');
+			if (options?.mode) {
+				flags.push(`--${options.mode}`);
 			}
-
-			if (options?.ref) {
-				flags.push(options.ref);
+			if (options?.rev) {
+				flags.push(options.rev);
 			}
 			await this.exec({ cwd: repoPath }, 'reset', '-q', ...flags, '--', ...pathspecs);
 		} catch (ex) {

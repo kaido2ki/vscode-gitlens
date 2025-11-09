@@ -48,9 +48,9 @@ import type { TelemetryContext } from '../../shared/contexts/telemetry';
 import { telemetryContext } from '../../shared/contexts/telemetry';
 import { emitTelemetrySentEvent } from '../../shared/telemetry';
 import { ruleStyles } from '../shared/components/vscode.css';
-import { graphStateContext } from './stateProvider';
+import { graphStateContext } from './context';
 import { actionButton, linkBase } from './styles/graph.css';
-import { graphHeaderControlStyles, progressStyles, repoHeaderStyles, titlebarStyles } from './styles/header.css';
+import { graphHeaderControlStyles, repoHeaderStyles, titlebarStyles } from './styles/header.css';
 import '@shoelace-style/shoelace/dist/components/option/option.js';
 import '@shoelace-style/shoelace/dist/components/select/select.js';
 import '../../shared/components/button';
@@ -59,6 +59,7 @@ import '../../shared/components/code-icon';
 import '../../shared/components/menu/menu-divider';
 import '../../shared/components/menu/menu-item';
 import '../../shared/components/menu/menu-label';
+import '../../shared/components/progress';
 import '../../shared/components/overlays/popover';
 import '../../shared/components/overlays/tooltip';
 import '../../shared/components/radio/radio';
@@ -114,8 +115,11 @@ export class GlGraphHeader extends SignalWatcher(LitElement) {
 		titlebarStyles,
 		repoHeaderStyles,
 		graphHeaderControlStyles,
-		progressStyles,
 		css`
+			progress-indicator {
+				top: 0;
+			}
+
 			.mcp-tooltip::part(body) {
 				--max-width: 320px;
 			}
@@ -158,9 +162,17 @@ export class GlGraphHeader extends SignalWatcher(LitElement) {
 		return Object.values(this.graphState.excludeRefs ?? {}).sort(compareGraphRefOpts);
 	}
 
+	// Local search query state (not in global context)
+	private _searchQuery: SearchQuery = { query: '' };
+
 	override updated(changedProperties: PropertyValues): void {
 		this.aiAllowed = (this.graphState.config?.aiEnabled ?? true) && (this.graphState.orgSettings?.ai ?? true);
 		super.updated(changedProperties);
+	}
+
+	setExternalSearchQuery(query: SearchQuery) {
+		this._searchQuery = query;
+		this.searchEl?.setExternalSearchQuery(query);
 	}
 
 	private async onJumpToRefPromise(alt: boolean): Promise<{ name: string; sha: string } | undefined> {
@@ -189,7 +201,7 @@ export class GlGraphHeader extends SignalWatcher(LitElement) {
 	}
 
 	private onSearchOpenInView() {
-		this._ipc.sendCommand(SearchOpenInViewCommand, { search: { ...this.graphState.filter } });
+		this._ipc.sendCommand(SearchOpenInViewCommand, { search: { ...this._searchQuery } });
 	}
 
 	private onExcludeTypesChanged(key: keyof GraphExcludeTypes, value: boolean) {
@@ -304,12 +316,14 @@ export class GlGraphHeader extends SignalWatcher(LitElement) {
 
 	private _searchPositionSignal = computed(() => {
 		const { searchResults } = this.graphState;
-		if (searchResults?.ids == null || !this.graphState.filter.query) return 0;
+		if (searchResults?.ids == null || !this._searchQuery.query) return 0;
 
 		const id = this.getActiveRowInfo()?.id;
 		let searchIndex = id ? searchResults.ids[id]?.i : undefined;
 		if (searchIndex == null) {
-			({ index: searchIndex } = this.getClosestSearchResultIndex(searchResults, { ...this.graphState.filter }));
+			({ index: searchIndex } = this.getClosestSearchResultIndex(searchResults, {
+				...this._searchQuery,
+			}));
 		}
 		return searchIndex < 1 ? 1 : searchIndex + 1;
 	});
@@ -319,7 +333,7 @@ export class GlGraphHeader extends SignalWatcher(LitElement) {
 	}
 
 	get searchValid() {
-		return this.graphState.filter.query.length > 2;
+		return (this._searchQuery.query?.length ?? 0) > 2;
 	}
 
 	handleFilterChange(e: CustomEvent) {
@@ -364,18 +378,21 @@ export class GlGraphHeader extends SignalWatcher(LitElement) {
 		this.graphState.searching = this.searchValid;
 		if (!this.searchValid) {
 			this.graphState.searchResultsResponse = undefined;
+			this.graphState.searchMode = 'normal';
 		}
 
 		try {
 			const rsp = await this._ipc.sendRequest(SearchRequest, {
-				search: this.searchValid ? { ...this.graphState.filter } : undefined /*limit: options?.limit*/,
+				search: this.searchValid ? { ...this._searchQuery } : undefined /*limit: options?.limit*/,
 			});
 
-			if (rsp.search && rsp.results) {
+			// Only log successful searches with at least 1 result
+			if (rsp.search && rsp.results && !('error' in rsp.results) && rsp.results.count > 0) {
 				this.searchEl.logSearch(rsp.search);
 			}
 
 			this.graphState.searchResultsResponse = rsp.results;
+			this.graphState.searchMode = this._searchQuery.filter ? 'filter' : 'normal';
 			if (rsp.selectedRows != null) {
 				this.graphState.selectedRows = rsp.selectedRows;
 			}
@@ -385,9 +402,9 @@ export class GlGraphHeader extends SignalWatcher(LitElement) {
 		this.graphState.searching = false;
 	}
 
-	@debounce(250)
+	@debounce(500)
 	private handleSearchInput(e: CustomEvent<SearchQuery>) {
-		this.graphState.filter = e.detail;
+		this._searchQuery = e.detail;
 		void this.handleSearch();
 	}
 
@@ -432,7 +449,7 @@ export class GlGraphHeader extends SignalWatcher(LitElement) {
 			next = direction === 'next';
 			({ index: searchIndex, id } = this.getClosestSearchResultIndex(
 				searchResults,
-				{ ...this.graphState.filter },
+				{ ...this._searchQuery },
 				next,
 			));
 		}
@@ -445,11 +462,11 @@ export class GlGraphHeader extends SignalWatcher(LitElement) {
 			// Indicates a boundary and we need to load more results
 			if (searchIndex === -1) {
 				if (next) {
-					if (this.graphState.filter.query && searchResults?.paging?.hasMore) {
+					if (this._searchQuery.query && searchResults?.paging?.hasMore) {
 						this.graphState.searching = true;
 						let moreResults;
 						try {
-							moreResults = await this.onSearchPromise?.({ ...this.graphState.filter }, { more: true });
+							moreResults = await this.onSearchPromise?.({ ...this._searchQuery }, { more: true });
 						} finally {
 							this.graphState.searching = false;
 						}
@@ -467,15 +484,12 @@ export class GlGraphHeader extends SignalWatcher(LitElement) {
 					} else {
 						searchIndex = 0;
 					}
-					// this.graphState.filter != null seems noop
-				} else if (direction === 'last' && this.graphState.filter != null && searchResults?.paging?.hasMore) {
+					// this._searchQuery != null seems noop
+				} else if (direction === 'last' && this._searchQuery != null && searchResults?.paging?.hasMore) {
 					this.graphState.searching = true;
 					let moreResults;
 					try {
-						moreResults = await this.onSearchPromise(
-							{ ...this.graphState.filter },
-							{ limit: 0, more: true },
-						);
+						moreResults = await this.onSearchPromise({ ...this._searchQuery }, { limit: 0, more: true });
 					} finally {
 						this.graphState.searching = false;
 					}
@@ -500,7 +514,7 @@ export class GlGraphHeader extends SignalWatcher(LitElement) {
 			this.graphState.searchResultsHidden = true;
 
 			searchIndex = this.getNextOrPreviousSearchResultIndex(searchIndex, next, searchResults, {
-				...this.graphState.filter,
+				...this._searchQuery,
 			});
 		}
 
@@ -530,7 +544,7 @@ export class GlGraphHeader extends SignalWatcher(LitElement) {
 			let timeout: ReturnType<typeof setTimeout> | undefined = setTimeout(() => {
 				timeout = undefined;
 				this.graphState.loading = true;
-			}, 500);
+			}, 250);
 
 			const ensureCore = async () => {
 				const e = await this.onEnsureRowPromise(id, false);
@@ -633,6 +647,7 @@ export class GlGraphHeader extends SignalWatcher(LitElement) {
 
 		return cache(
 			html`<header class="titlebar graph-app__header">
+				<progress-indicator ?active="${this.graphState.isBusy}"></progress-indicator>
 				<div class="titlebar__row titlebar__row--wrap">
 					<div class="titlebar__group">
 						<gl-repo-button-group
@@ -649,84 +664,83 @@ export class GlGraphHeader extends SignalWatcher(LitElement) {
 						>
 						${when(
 							this.graphState.allowed && repo,
-							() => html`
-								<span><code-icon icon="chevron-right"></code-icon></span>${when(
-									this.graphState.branchState?.pr,
-									pr => html`
-										<gl-popover placement="bottom">
-											<button slot="anchor" type="button" class="action-button">
-												<issue-pull-request
-													type="pr"
-													identifier=${`#${pr.id}`}
-													status=${pr.state}
-													compact
-												></issue-pull-request>
-											</button>
-											<div slot="content">
-												<issue-pull-request
-													type="pr"
-													name=${pr.title}
-													url=${pr.url}
-													identifier=${`#${pr.id}`}
-													status=${pr.state}
-													.date=${pr.updatedDate}
-													.dateFormat=${this.graphState.config?.dateFormat}
-													.dateStyle=${this.graphState.config?.dateStyle}
-													details
-													@gl-issue-pull-request-details=${() => {
-														this.onOpenPullRequest(pr);
-													}}
-												>
-												</issue-pull-request>
-											</div>
-										</gl-popover>
-									`,
-								)}
-								<gl-ref-button
-									href=${createWebviewCommandLink(
-										'gitlens.graph.switchToAnotherBranch',
-										this.graphState.webviewId,
-										this.graphState.webviewInstanceId,
+							() =>
+								html`<span><code-icon icon="chevron-right"></code-icon></span>${when(
+										this.graphState.branchState?.pr,
+										pr => html`
+											<gl-popover placement="bottom">
+												<button slot="anchor" type="button" class="action-button">
+													<issue-pull-request
+														type="pr"
+														identifier=${`#${pr.id}`}
+														status=${pr.state}
+														compact
+													></issue-pull-request>
+												</button>
+												<div slot="content">
+													<issue-pull-request
+														type="pr"
+														name=${pr.title}
+														url=${pr.url}
+														identifier=${`#${pr.id}`}
+														status=${pr.state}
+														.date=${pr.updatedDate}
+														.dateFormat=${this.graphState.config?.dateFormat}
+														.dateStyle=${this.graphState.config?.dateStyle}
+														details
+														@gl-issue-pull-request-details=${() => {
+															this.onOpenPullRequest(pr);
+														}}
+													>
+													</issue-pull-request>
+												</div>
+											</gl-popover>
+										`,
 									)}
-									icon
-									.ref=${this.graphState.branch}
-									?worktree=${this.graphState.branchState?.worktree}
-								>
-									<div slot="tooltip">
-										Switch Branch...
-										<hr />
-										<code-icon icon="git-branch" aria-hidden="true"></code-icon>
-										<span class="inline-code">${this.graphState.branch?.name}</span>${when(
-											this.graphState.branchState?.worktree,
-											() => html`<i> (in a worktree)</i> `,
+									<gl-ref-button
+										href=${createWebviewCommandLink(
+											'gitlens.graph.switchToAnotherBranch',
+											this.graphState.webviewId,
+											this.graphState.webviewInstanceId,
 										)}
-									</div>
-								</gl-ref-button>
-								<gl-button class="jump-to-ref" appearance="toolbar" @click=${this.handleJumpToRef}>
-									<code-icon icon="target"></code-icon>
-									<span slot="tooltip">
-										Jump to HEAD
-										<br />
-										[Alt] Jump to Reference...
+										icon
+										.ref=${this.graphState.branch}
+										?worktree=${this.graphState.branchState?.worktree}
+									>
+										<div slot="tooltip">
+											Switch Branch...
+											<hr />
+											<code-icon icon="git-branch" aria-hidden="true"></code-icon>
+											<span class="inline-code">${this.graphState.branch?.name}</span>${when(
+												this.graphState.branchState?.worktree,
+												() => html`<i> (in a worktree)</i> `,
+											)}
+										</div>
+									</gl-ref-button>
+									<gl-button class="jump-to-ref" appearance="toolbar" @click=${this.handleJumpToRef}>
+										<code-icon icon="target"></code-icon>
+										<span slot="tooltip">
+											Jump to HEAD
+											<br />
+											[Alt] Jump to Reference...
+										</span>
+									</gl-button>
+									<span>
+										<code-icon icon="chevron-right"></code-icon>
 									</span>
-								</gl-button>
-								<span>
-									<code-icon icon="chevron-right"></code-icon>
-								</span>
-								<gl-git-actions-buttons
-									.branchName=${this.graphState.branch?.name}
-									.branchState=${this.graphState.branchState}
-									.lastFetched=${this.graphState.lastFetched}
-									.state=${this.graphState}
-								></gl-git-actions-buttons>
-							`,
+									<gl-git-actions-buttons
+										.branchName=${this.graphState.branch?.name}
+										.branchState=${this.graphState.branchState}
+										.lastFetched=${this.graphState.lastFetched}
+										.state=${this.graphState}
+									></gl-git-actions-buttons>`,
 						)}
 					</div>
 					<div class="titlebar__group">
 						${when(
 							!(this.graphState.state.mcpBannerCollapsed ?? true),
-							() => html`
-								<gl-popover class="mcp-tooltip" placement="bottom" trigger="click focus hover">
+							() =>
+								html`<gl-popover class="mcp-tooltip" placement="bottom" trigger="click focus hover">
 									<a
 										class="action-button action-button--mcp"
 										href=${createCommandLink('gitlens.ai.mcp.install', { source: 'graph' })}
@@ -739,8 +753,7 @@ export class GlGraphHeader extends SignalWatcher(LitElement) {
 										Leverage Git and Integration information from GitLens in AI chat.
 										<a href="https://help.gitkraken.com/mcp/mcp-getting-started">Learn more</a>
 									</div>
-								</gl-popover>
-							`,
+								</gl-popover>`,
 						)}
 						<gl-tooltip placement="bottom">
 							<a
@@ -822,12 +835,11 @@ export class GlGraphHeader extends SignalWatcher(LitElement) {
 						</gl-tooltip>
 						${when(
 							this.graphState.subscription == null || !isSubscriptionPaid(this.graphState.subscription),
-							() => html`
-								<gl-feature-badge
+							() =>
+								html`<gl-feature-badge
 									.source=${{ source: 'graph', detail: 'badge' } as const}
 									.subscription=${this.graphState.subscription}
-								></gl-feature-badge>
-							`,
+								></gl-feature-badge>`,
 						)}
 					</div>
 				</div>
@@ -837,8 +849,8 @@ export class GlGraphHeader extends SignalWatcher(LitElement) {
 						this.graphState.workingTreeStats != null &&
 						(this.graphState.workingTreeStats.hasConflicts ||
 							this.graphState.workingTreeStats.pausedOpStatus),
-					() => html`
-						<div class="merge-conflict-warning">
+					() =>
+						html`<div class="merge-conflict-warning">
 							<gl-merge-rebase-status
 								class="merge-conflict-warning__content"
 								?conflicts=${this.graphState.workingTreeStats?.hasConflicts}
@@ -852,13 +864,12 @@ export class GlGraphHeader extends SignalWatcher(LitElement) {
 									webviewInstance: this.graphState.webviewInstanceId,
 								}}
 							></gl-merge-rebase-status>
-						</div>
-					`,
+						</div>`,
 				)}
 				${when(
 					this.graphState.allowed,
-					() => html`
-						<div class="titlebar__row">
+					() =>
+						html`<div class="titlebar__row">
 							<div class="titlebar__group">
 								<gl-tooltip placement="top" content="Branches Visibility">
 									<sl-select
@@ -905,7 +916,9 @@ export class GlGraphHeader extends SignalWatcher(LitElement) {
 									</sl-select>
 								</gl-tooltip>
 								<div
-									class=${`shrink ${!Object.values(this.graphState.excludeRefs ?? {}).length && 'hidden'}`}
+									class=${`shrink ${
+										!Object.values(this.graphState.excludeRefs ?? {}).length && 'hidden'
+									}`}
 								>
 									<gl-popover
 										class="popover"
@@ -1060,7 +1073,7 @@ export class GlGraphHeader extends SignalWatcher(LitElement) {
 									step=${this.searchPosition}
 									total=${searchResults?.count ?? 0}
 									?valid=${this.searchValid}
-									value=${this.graphState.filter.query}
+									value=${this._searchQuery.query ?? ''}
 									@gl-search-inputchange=${this.handleSearchInput}
 									@gl-search-navigate=${this.handleSearchNavigation}
 									@gl-search-openinview=${this.onSearchOpenInView}
@@ -1190,15 +1203,8 @@ export class GlGraphHeader extends SignalWatcher(LitElement) {
 									</gl-popover>
 								</span>
 							</div>
-						</div>
-					`,
+						</div>`,
 				)}
-				<div
-					class=${`progress-container infinite${this.graphState.isBusy ? ' active' : ''}`}
-					role="progressbar"
-				>
-					<div class="progress-bar"></div>
-				</div>
 			</header>`,
 		);
 	}

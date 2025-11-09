@@ -3,7 +3,7 @@ import { customElement, state } from 'lit/decorators.js';
 import { when } from 'lit/directives/when.js';
 import type { ViewFilesLayout } from '../../../config';
 import type { GlCommands } from '../../../constants.commands';
-import type { Serialized } from '../../../system/serialize';
+import type { IpcSerialized } from '../../../system/ipcSerialize';
 import { pluralize } from '../../../system/string';
 import type { DraftState, ExecuteCommitActionsParams, Mode, State } from '../../commitDetails/protocol';
 import {
@@ -40,6 +40,7 @@ import type { CreatePatchMetadataEventDetail } from '../plus/patchDetails/compon
 import { GlAppHost } from '../shared/appHost';
 import type { IssuePullRequest } from '../shared/components/rich/issue-pull-request';
 import type { WebviewPane, WebviewPaneExpandedChangeEventDetail } from '../shared/components/webview-pane';
+import type { LoggerContext } from '../shared/contexts/logger';
 import { DOM } from '../shared/dom';
 import type { HostIpc } from '../shared/ipc';
 import type { GlCommitDetails } from './components/gl-commit-details';
@@ -67,17 +68,17 @@ interface ExplainState {
 }
 
 @customElement('gl-commit-details-app')
-export class GlCommitDetailsApp extends GlAppHost<Serialized<State>> {
+export class GlCommitDetailsApp extends GlAppHost<IpcSerialized<State>> {
 	protected override createRenderRoot(): HTMLElement {
 		return this;
 	}
 
-	protected override createStateProvider(state: Serialized<State>, ipc: HostIpc): CommitDetailsStateProvider {
-		return new CommitDetailsStateProvider(this, state, ipc);
-	}
-
-	protected override onPersistState(state: Serialized<State>): void {
-		this._ipc.setPersistedState({ mode: state.mode, pinned: state.pinned, preferences: state.preferences });
+	protected override createStateProvider(
+		bootstrap: string,
+		ipc: HostIpc,
+		logger: LoggerContext,
+	): CommitDetailsStateProvider {
+		return new CommitDetailsStateProvider(this, bootstrap, ipc, logger);
 	}
 
 	@state()
@@ -400,6 +401,7 @@ export class GlCommitDetailsApp extends GlAppHost<Serialized<State>> {
 								.preferences=${this.state?.preferences}
 								.orgSettings=${this.state?.orgSettings}
 								.isUncommitted=${this.isUncommitted}
+								.searchContext=${this.state?.searchContext}
 							></gl-commit-details>`,
 						() =>
 							html`<gl-wip-details

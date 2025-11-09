@@ -43,6 +43,22 @@ export type WebviewIds = `gitlens.${WebviewTypes}`;
 export type WebviewViewTypes = 'commitDetails' | 'graph' | 'graphDetails' | 'home' | 'patchDetails' | 'timeline';
 export type WebviewViewIds<T extends WebviewViewTypes = WebviewViewTypes> = `gitlens.views.${T}`;
 
+export type WebviewTypeFromId<T extends WebviewIds> = T extends `gitlens.${infer U}`
+	? U extends WebviewTypes
+		? U
+		: never
+	: never;
+export type WebviewViewTypeFromId<T extends WebviewViewIds> = T extends `gitlens.views.${infer U}`
+	? U extends WebviewViewTypes
+		? U
+		: never
+	: never;
+export type WebviewOrWebviewViewTypeFromId<T extends WebviewIds | WebviewViewIds> = T extends WebviewIds
+	? WebviewTypeFromId<T>
+	: T extends WebviewViewIds
+		? WebviewViewTypeFromId<T>
+		: never;
+
 export type ViewTypes = TreeViewTypes | WebviewViewTypes;
 export type ViewIds = TreeViewIds | WebviewViewIds;
 
@@ -88,26 +104,23 @@ export const viewIdsByDefaultContainerId = new Map<ViewContainerIds | CoreViewCo
 
 export type TreeViewRefNodeTypes = 'branch' | 'commit' | 'stash' | 'tag';
 export const treeViewRefNodeTypes: TreeViewRefNodeTypes[] = ['branch', 'commit', 'stash', 'tag'];
-export type TreeViewRefFileNodeTypes = 'commit-file' | 'file-commit' | 'results-file' | 'stash-file';
+export type TreeViewRefFileNodeTypes =
+	| 'commit-file'
+	| 'file-commit'
+	| 'results-file'
+	| 'stash-file'
+	| 'status-file'
+	| 'uncommitted-file';
 export const treeViewRefFileNodeTypes: TreeViewRefFileNodeTypes[] = [
 	'commit-file',
 	'file-commit',
 	'results-file',
 	'stash-file',
-];
-export type TreeViewFileNodeTypes =
-	| TreeViewRefFileNodeTypes
-	| 'conflict-file'
-	// | 'folder'
-	| 'status-file'
-	| 'uncommitted-file';
-export const treeViewFileNodeTypes: TreeViewFileNodeTypes[] = [
-	...treeViewRefFileNodeTypes,
-	'conflict-file',
-	// 'folder',
 	'status-file',
 	'uncommitted-file',
 ];
+export type TreeViewFileNodeTypes = TreeViewRefFileNodeTypes | 'conflict-file';
+export const treeViewFileNodeTypes: TreeViewFileNodeTypes[] = [...treeViewRefFileNodeTypes, 'conflict-file'];
 export type TreeViewSubscribableNodeTypes =
 	| 'autolinks'
 	| 'commits-current-branch'

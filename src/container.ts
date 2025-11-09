@@ -7,6 +7,7 @@ import {
 	getSupportedGitProviders,
 	getSupportedRepositoryLocationProvider,
 	getSupportedWorkspacesStorageProvider,
+	setTelemetryService,
 } from '@env/providers';
 import { FileAnnotationController } from './annotations/fileAnnotationController';
 import { LineAnnotationController } from './annotations/lineAnnotationController';
@@ -190,6 +191,7 @@ export class Container {
 		this._context = context;
 		this._prerelease = prerelease;
 		this._version = version;
+		this._previousVersion = previousVersion;
 		this.ensureModeApplied();
 
 		this._disposables = [
@@ -199,6 +201,7 @@ export class Container {
 			(this._usage = new UsageTracker(this, storage)),
 			configuration.onDidChangeAny(this.onAnyConfigurationChanged, this),
 		];
+		setTelemetryService(this._telemetry);
 
 		this._urls = new UrlsProvider(this.env);
 		this._disposables.push((this._connection = new ServerConnection(this, this._urls)));
@@ -745,6 +748,11 @@ export class Container {
 	private readonly _version: string;
 	get version(): string {
 		return this._version;
+	}
+
+	private readonly _previousVersion: string | undefined;
+	get previousVersion(): string | undefined {
+		return this._previousVersion;
 	}
 
 	private readonly _views: Views;

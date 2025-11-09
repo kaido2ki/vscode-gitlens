@@ -243,13 +243,13 @@ export class UndoGenerateRebaseCommand extends GlCommandBase {
 			if (result !== confirm) return;
 
 			// Check if there are working tree changes and stash them
-			const status = await svc.status.getStatus();
-			if (status?.files && status.files.length > 0) {
+			const hasChanges = await svc.status.hasWorkingChanges();
+			if (hasChanges) {
 				await svc.stash?.saveStash(undefined, undefined, { includeUntracked: true });
 			}
 
 			// Reset hard to the previous HEAD
-			await svc.reset(args.previousHeadRef.ref, { hard: true });
+			await svc.ops?.reset(args.previousHeadRef.ref, { mode: 'hard' });
 
 			// Apply the generated stash
 			try {
@@ -351,7 +351,7 @@ export async function generateRebase(
 				}
 
 				// reset the current branch to the new shas
-				await svc.reset(shas[shas.length - 1], { hard: true });
+				await svc.ops?.reset(shas[shas.length - 1], { mode: 'hard' });
 
 				// Capture the new HEAD after reset
 				generatedHeadRef = createReference(shas[shas.length - 1], svc.path, { refType: 'revision' });

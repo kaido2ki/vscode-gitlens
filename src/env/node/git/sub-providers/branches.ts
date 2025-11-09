@@ -88,7 +88,7 @@ export class BranchesGitSubProvider implements GitBranchesSubProvider {
 
 		const [pausedOpStatusResult, committerDateResult, defaultWorktreePathResult] = await Promise.allSettled([
 			isDetachedHead(ref.name)
-				? this.provider.status?.getPausedOperationStatus(repoPath, cancellation)
+				? this.provider.pausedOps.getPausedOperationStatus(repoPath, cancellation)
 				: undefined,
 			this.git
 				.exec(
@@ -747,7 +747,7 @@ export class BranchesGitSubProvider implements GitBranchesSubProvider {
 
 			// Check if branch created from an explicit branch
 			let match = entries[0].match(/branch: Created from (.*)$/);
-			if (match != null && match.length === 2) {
+			if (match?.length === 2) {
 				let name: string | undefined = match[1];
 				if (name !== 'HEAD') {
 					if (options?.upstream) {
@@ -772,7 +772,7 @@ export class BranchesGitSubProvider implements GitBranchesSubProvider {
 			if (!entries.length) return undefined;
 
 			match = entries[entries.length - 1].match(/checkout: moving from ([^\s]+)\s/);
-			if (match != null && match.length === 2) {
+			if (match?.length === 2) {
 				let name: string | undefined = match[1];
 				if (options?.upstream) {
 					const upstream = await this.provider.refs.getSymbolicReferenceName(repoPath, `${name}@{u}`);

@@ -7,7 +7,7 @@ import { getReferenceLabel } from '../utils/reference.utils';
 
 export async function abortPausedOperation(svc: GitRepositoryService, options?: { quit?: boolean }): Promise<void> {
 	try {
-		return await svc.status.abortPausedOperation?.(options);
+		return await svc.pausedOps?.abortPausedOperation?.(options);
 	} catch (ex) {
 		void window.showErrorMessage(ex.message);
 	}
@@ -23,23 +23,16 @@ export async function skipPausedOperation(svc: GitRepositoryService): Promise<vo
 
 async function continuePausedOperationCore(svc: GitRepositoryService, skip: boolean = false): Promise<void> {
 	try {
-		return await svc.status.continuePausedOperation?.(skip ? { skip: true } : undefined);
+		return await svc.pausedOps?.continuePausedOperation?.(skip ? { skip: true } : undefined);
 	} catch (ex) {
 		if (
 			ex instanceof PausedOperationContinueError &&
 			ex.reason === PausedOperationContinueErrorReason.EmptyCommit
 		) {
-			let operation: GitPausedOperationStatus | undefined;
-			try {
-				const repo = svc.getRepository();
-				if (repo != null) {
-					operation = await repo.git.status.getPausedOperationStatus?.();
-					operation ??= await repo
-						.waitForRepoChange(500)
-						.then(() => repo.git.status.getPausedOperationStatus?.());
-				}
-			} catch {}
-			operation ??= ex.operation;
+			// Use the operation status from the error - it's already accurate
+			// The previous code tried to wait for a repo change, but that would fire on the
+			// change event from the failed continue (not the skip), resulting in stale data
+			const operation: GitPausedOperationStatus = ex.operation;
 
 			const pausedAt = getReferenceLabel(operation.incoming, { icon: false, label: true, quoted: true });
 

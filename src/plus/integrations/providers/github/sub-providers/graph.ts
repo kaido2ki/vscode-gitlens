@@ -21,12 +21,13 @@ import type { GitRemote } from '../../../../../git/models/remote';
 import type { GitUser } from '../../../../../git/models/user';
 import type { GitWorktree } from '../../../../../git/models/worktree';
 import type { GitGraphSearch, GitGraphSearchResultData, GitGraphSearchResults } from '../../../../../git/search';
-import { getSearchQueryComparisonKey, parseSearchQuery } from '../../../../../git/search';
+import { getSearchQueryComparisonKey, parseSearchQueryGitHubCommand } from '../../../../../git/search';
 import { isBranchStarred } from '../../../../../git/utils/-webview/branch.utils';
 import { getRemoteIconUri } from '../../../../../git/utils/-webview/icons';
 import { getBranchId, getBranchNameWithoutRemote } from '../../../../../git/utils/branch.utils';
 import { getChangedFilesCount } from '../../../../../git/utils/commit.utils';
 import { createReference } from '../../../../../git/utils/reference.utils';
+import { isUncommitted } from '../../../../../git/utils/revision.utils';
 import { getTagId } from '../../../../../git/utils/tag.utils';
 import { configuration } from '../../../../../system/-webview/configuration';
 import { log } from '../../../../../system/decorators/log';
@@ -40,7 +41,6 @@ import type {
 	GraphTagContextValue,
 } from '../../../../../webviews/plus/graph/protocol';
 import type { GitHubGitProviderInternal } from '../githubGitProvider';
-import { getQueryArgsFromSearchQuery } from '../utils/-webview/search.utils';
 
 const doubleQuoteRegex = /"/g;
 
@@ -66,7 +66,7 @@ export class GraphGitSubProvider implements GitGraphSubProvider {
 
 		const [logResult, headBranchResult, branchesResult, remotesResult, tagsResult, currentUserResult] =
 			await Promise.allSettled([
-				this.provider.commits.getLog(repoPath, rev, {
+				this.provider.commits.getLog(repoPath, !rev || isUncommitted(rev) ? 'HEAD' : rev, {
 					all: true,
 					ordering: ordering,
 					limit: defaultLimit,
@@ -268,7 +268,9 @@ export class GraphGitSubProvider implements GitGraphSubProvider {
 						getRemoteIconUri(this.container, remote, asWebviewUri)
 					)?.toString(true);
 					context = {
-						webviewItem: `gitlens:branch+remote${isBranchStarred(this.container, remoteBranchId) ? '+starred' : ''}`,
+						webviewItem: `gitlens:branch+remote${
+							isBranchStarred(this.container, remoteBranchId) ? '+starred' : ''
+						}`,
 						webviewItemValue: {
 							type: 'branch',
 							ref: createReference(headBranch.name, repoPath, {
@@ -322,7 +324,9 @@ export class GraphGitSubProvider implements GitGraphSubProvider {
 							getRemoteIconUri(this.container, remote, asWebviewUri)
 						)?.toString(true);
 						context = {
-							webviewItem: `gitlens:branch+remote${isBranchStarred(this.container, remoteBranchId) ? '+starred' : ''}`,
+							webviewItem: `gitlens:branch+remote${
+								isBranchStarred(this.container, remoteBranchId) ? '+starred' : ''
+							}`,
 							webviewItemValue: {
 								type: 'branch',
 								ref: createReference(b, repoPath, {
@@ -449,7 +453,7 @@ export class GraphGitSubProvider implements GitGraphSubProvider {
 			worktrees: worktrees,
 			worktreesByBranch: worktreesByBranch,
 			rows: rows,
-			id: options?.ref,
+			id: options?.ref ?? first(log.commits.values())?.sha,
 
 			paging: {
 				limit: log.limit,
@@ -488,9 +492,9 @@ export class GraphGitSubProvider implements GitGraphSubProvider {
 	@log<GraphGitSubProvider['searchGraph']>({
 		args: {
 			1: s =>
-				`[${s.matchAll ? 'A' : ''}${s.matchCase ? 'C' : ''}${s.matchRegex ? 'R' : ''}${s.matchWholeWord ? 'W' : ''}]: ${
-					s.query.length > 500 ? `${s.query.substring(0, 500)}...` : s.query
-				}`,
+				`[${s.matchAll ? 'A' : ''}${s.matchCase ? 'C' : ''}${s.matchRegex ? 'R' : ''}${
+					s.matchWholeWord ? 'W' : ''
+				}]: ${s.query.length > 500 ? `${s.query.substring(0, 500)}...` : s.query}`,
 			2: o => `limit=${o?.limit}, ordering=${o?.ordering}`,
 		},
 	})
@@ -509,8 +513,12 @@ export class GraphGitSubProvider implements GitGraphSubProvider {
 		const comparisonKey = getSearchQueryComparisonKey(search);
 
 		try {
+			const currentUser = search.query.includes('@me')
+				? await this.provider.config.getCurrentUser(repoPath)
+				: undefined;
+
 			const results: GitGraphSearchResults = new Map<string, GitGraphSearchResultData>();
-			const operations = parseSearchQuery(search);
+			const { args: queryArgs, filters, operations } = parseSearchQueryGitHubCommand(search, currentUser);
 
 			const values = operations.get('commit:');
 			if (values != null) {
@@ -526,22 +534,24 @@ export class GraphGitSubProvider implements GitGraphSubProvider {
 					results.set(commit.sha, {
 						i: i++,
 						date: Number(options?.ordering === 'author-date' ? commit.author.date : commit.committer.date),
+						files: commit.fileset?.files,
 					});
 				}
 
 				return {
 					repoPath: repoPath,
 					query: search,
+					queryFilters: filters,
 					comparisonKey: comparisonKey,
 					results: results,
 				};
 			}
 
-			const queryArgs = await getQueryArgsFromSearchQuery(this.provider, search, operations, repoPath);
-			if (queryArgs.length === 0) {
+			if (!queryArgs.length) {
 				return {
 					repoPath: repoPath,
 					query: search,
+					queryFilters: filters,
 					comparisonKey: comparisonKey,
 					results: results,
 				};
@@ -557,7 +567,13 @@ export class GraphGitSubProvider implements GitGraphSubProvider {
 				cursor?: string,
 			): Promise<GitGraphSearch> {
 				if (cancellation?.isCancellationRequested) {
-					return { repoPath: repoPath, query: search, comparisonKey: comparisonKey, results: results };
+					return {
+						repoPath: repoPath,
+						query: search,
+						queryFilters: filters,
+						comparisonKey: comparisonKey,
+						results: results,
+					};
 				}
 
 				limit = this.provider.getPagingLimit(limit ?? configuration.get('advanced.maxSearchItems'));
@@ -573,13 +589,20 @@ export class GraphGitSubProvider implements GitGraphSubProvider {
 				});
 
 				if (result == null || cancellation?.isCancellationRequested) {
-					return { repoPath: repoPath, query: search, comparisonKey: comparisonKey, results: results };
+					return {
+						repoPath: repoPath,
+						query: search,
+						queryFilters: filters,
+						comparisonKey: comparisonKey,
+						results: results,
+					};
 				}
 
 				for (const commit of result.values) {
 					results.set(commit.sha, {
 						i: results.size,
 						date: Number(options?.ordering === 'author-date' ? commit.authorDate : commit.committerDate),
+						files: undefined,
 					});
 				}
 
@@ -588,14 +611,10 @@ export class GraphGitSubProvider implements GitGraphSubProvider {
 				return {
 					repoPath: repoPath,
 					query: search,
+					queryFilters: filters,
 					comparisonKey: comparisonKey,
 					results: results,
-					paging: result.pageInfo?.hasNextPage
-						? {
-								limit: limit,
-								hasMore: true,
-							}
-						: undefined,
+					paging: result.pageInfo?.hasNextPage ? { limit: limit, hasMore: true } : undefined,
 					more: async (limit: number): Promise<GitGraphSearch> => searchGraphCore.call(this, limit, cursor),
 				};
 			}
