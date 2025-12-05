@@ -8169,7 +8169,7 @@
 					{
 						"when": "webviewItem =~ /gitlens:file\\b/ && !listMultiSelection && gitlens:views:canCompare:file && webview == gitlens.views.commitDetails",
 						"group": "4_gitlens_compare",
-						"order": 99
+						"order": 98
 					}
 				]
 			}
@@ -8181,7 +8181,7 @@
 					{
 						"when": "webviewItem =~ /gitlens:file\\b/ && !listMultiSelection && gitlens:views:canCompare:file && webview == gitlens.views.graphDetails",
 						"group": "4_gitlens_compare",
-						"order": 99
+						"order": 98
 					}
 				]
 			}
@@ -8228,6 +8228,18 @@
 				"view/item/context": [
 					{
 						"when": "viewItem =~ /gitlens:(branch|commit|stash|tag)\\b/ && !listMultiSelection && gitlens:views:canCompare",
+						"group": "4_gitlens_compare",
+						"order": 98
+					}
+				]
+			}
+		},
+		"gitlens.views.compareWithSelected:graph": {
+			"label": "Compare with Selected",
+			"menus": {
+				"webview/context": [
+					{
+						"when": "webviewItem =~ /gitlens:(branch|commit|stash|tag)\\b/ && !listMultiSelection && gitlens:views:canCompare",
 						"group": "4_gitlens_compare",
 						"order": 98
 					}
@@ -15159,6 +15171,18 @@
 				"view/item/context": [
 					{
 						"when": "viewItem =~ /gitlens:(branch|commit|stash|tag)\\b/ && !listMultiSelection",
+						"group": "4_gitlens_compare",
+						"order": 99
+					}
+				]
+			}
+		},
+		"gitlens.views.selectForCompare:graph": {
+			"label": "Select for Compare",
+			"menus": {
+				"webview/context": [
+					{
+						"when": "webviewItem =~ /gitlens:(branch|commit|stash|tag)\\b/ && !listMultiSelection",
 						"group": "4_gitlens_compare",
 						"order": 99
 					}
