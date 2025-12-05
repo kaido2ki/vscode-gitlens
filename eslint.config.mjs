@@ -1,6 +1,7 @@
 // @ts-check
 import globals from 'globals';
 import { includeIgnoreFile } from '@eslint/compat';
+import { defineConfig } from 'eslint/config';
 import js from '@eslint/js';
 import ts from 'typescript-eslint';
 import antiTrojanSource from 'eslint-plugin-anti-trojan-source';
@@ -9,6 +10,7 @@ import importX from 'eslint-plugin-import-x';
 import { configs as litConfigs } from 'eslint-plugin-lit';
 import { configs as wcConfigs } from 'eslint-plugin-wc';
 import noSrcImports from './scripts/eslint-rules/no-src-imports.js';
+import reactCompiler from 'eslint-plugin-react-compiler';
 import { fileURLToPath } from 'node:url';
 
 /** @type {Awaited<import('typescript-eslint').Config>[number]['languageOptions']} */
@@ -143,7 +145,7 @@ const restrictedImports = {
 
 const gitignorePath = fileURLToPath(new URL('./.gitignore', import.meta.url));
 
-export default ts.config(
+export default defineConfig(
 	includeIgnoreFile(gitignorePath),
 	{ ignores: ignorePatterns.default },
 	js.configs.recommended,
@@ -154,8 +156,11 @@ export default ts.config(
 		languageOptions: { ...defaultLanguageOptions },
 		linterOptions: { reportUnusedDisableDirectives: true },
 		plugins: {
+			// @ts-ignore
 			'import-x': importX,
+			// @ts-ignore
 			'anti-trojan-source': antiTrojanSource,
+			// @ts-ignore
 			'@gitlens': { rules: { 'no-src-imports': noSrcImports } },
 		},
 		rules: {
@@ -425,7 +430,12 @@ export default ts.config(
 		name: 'webviews:apps',
 		files: filePatterns.webviewsApps,
 		ignores: ignorePatterns.extensionOnly,
-		extends: [litConfigs['flat/recommended'], wcConfigs['flat/recommended'], wcConfigs['flat/best-practice']],
+		extends: [
+			litConfigs['flat/recommended'],
+			wcConfigs['flat/recommended'],
+			wcConfigs['flat/best-practice'],
+			reactCompiler.configs.recommended,
+		],
 		languageOptions: { ...defaultLanguageOptions, globals: { ...globals.browser } },
 		rules: {
 			'@typescript-eslint/no-restricted-imports': restrictedImports.webviews,

@@ -690,7 +690,7 @@ export class GitCommit implements GitRevisionReference {
 	}
 
 	@gate()
-	async isPushed(): Promise<boolean> {
+	isPushed(): Promise<boolean> {
 		return this.container.git.getRepositoryService(this.repoPath).commits.hasCommitBeenPushed(this.ref);
 	}
 
@@ -789,4 +789,4 @@ export interface GitStashCommit extends GitCommit {
 	readonly parentTimestamps?: GitStashParentInfo[];
 }
 
-export type GitCommitWithFullDetails = GitCommit & SomeNonNullable<GitCommit, 'message' | 'fileset'>;
+export type GitCommitWithFullDetails = GitCommit & RequireSomeNonNullable<GitCommit, 'message' | 'fileset'>;

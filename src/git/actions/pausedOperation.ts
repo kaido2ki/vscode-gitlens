@@ -1,6 +1,7 @@
 import { window } from 'vscode';
+import { showGitErrorMessage } from '../../messages';
 import { executeCommand } from '../../system/-webview/command';
-import { PausedOperationContinueError, PausedOperationContinueErrorReason } from '../errors';
+import { PausedOperationContinueError } from '../errors';
 import type { GitRepositoryService } from '../gitRepositoryService';
 import type { GitPausedOperationStatus } from '../models/pausedOperationStatus';
 import { getReferenceLabel } from '../utils/reference.utils';
@@ -9,7 +10,7 @@ export async function abortPausedOperation(svc: GitRepositoryService, options?: 
 	try {
 		return await svc.pausedOps?.abortPausedOperation?.(options);
 	} catch (ex) {
-		void window.showErrorMessage(ex.message);
+		void showGitErrorMessage(ex);
 	}
 }
 
@@ -25,14 +26,11 @@ async function continuePausedOperationCore(svc: GitRepositoryService, skip: bool
 	try {
 		return await svc.pausedOps?.continuePausedOperation?.(skip ? { skip: true } : undefined);
 	} catch (ex) {
-		if (
-			ex instanceof PausedOperationContinueError &&
-			ex.reason === PausedOperationContinueErrorReason.EmptyCommit
-		) {
+		if (PausedOperationContinueError.is(ex, 'emptyCommit')) {
 			// Use the operation status from the error - it's already accurate
 			// The previous code tried to wait for a repo change, but that would fire on the
 			// change event from the failed continue (not the skip), resulting in stale data
-			const operation: GitPausedOperationStatus = ex.operation;
+			const operation: GitPausedOperationStatus = ex.details.operation;
 
 			const pausedAt = getReferenceLabel(operation.incoming, { icon: false, label: true, quoted: true });
 
@@ -56,6 +54,21 @@ async function continuePausedOperationCore(svc: GitRepositoryService, skip: bool
 			return;
 		}
 
-		void window.showErrorMessage(ex.message);
+		if (
+			PausedOperationContinueError.is(ex, 'uncommittedChanges') ||
+			PausedOperationContinueError.is(ex, 'unstagedChanges') ||
+			PausedOperationContinueError.is(ex, 'wouldOverwriteChanges')
+		) {
+			void window.showWarningMessage(ex.message);
+			return;
+		}
+
+		if (PausedOperationContinueError.is(ex, 'conflicts') || PausedOperationContinueError.is(ex, 'unmergedFiles')) {
+			void window.showWarningMessage(ex.message);
+			void executeCommand('gitlens.showCommitsView');
+			return;
+		}
+
+		void showGitErrorMessage(ex);
 	}
 }

@@ -1,12 +1,12 @@
 import { window } from 'vscode';
 import type { Container } from '../../container';
-import { ResetError, ResetErrorReason } from '../../git/errors';
+import { ResetError } from '../../git/errors';
 import type { GitBranch } from '../../git/models/branch';
 import type { GitLog } from '../../git/models/log';
 import type { GitReference, GitRevisionReference, GitTagReference } from '../../git/models/reference';
 import type { Repository } from '../../git/models/repository';
 import { getReferenceLabel } from '../../git/utils/reference.utils';
-import { showGenericErrorMessage } from '../../messages';
+import { showGitErrorMessage } from '../../messages';
 import type { FlagsQuickPickItem } from '../../quickpicks/items/flags';
 import { createFlagsQuickPickItem } from '../../quickpicks/items/flags';
 import { Logger } from '../../system/logger';
@@ -87,16 +87,12 @@ export class ResetGitCommand extends QuickCommand<State> {
 		} catch (ex) {
 			Logger.error(ex, this.title);
 
-			if (
-				mode === 'keep' &&
-				(ResetError.is(ex, ResetErrorReason.EntryNotUpToDate) ||
-					ResetError.is(ex, ResetErrorReason.ChangesWouldBeOverwritten))
-			) {
+			if (mode === 'keep' && (ResetError.is(ex, 'notUpToDate') || ResetError.is(ex, 'wouldOverwriteChanges'))) {
 				void window.showWarningMessage(
 					'Unable to safely reset. Your local changes would be overwritten by the reset. Please commit or stash your changes before trying again.',
 				);
 			} else {
-				void showGenericErrorMessage(ex.message);
+				void showGitErrorMessage(ex);
 			}
 		}
 	}
@@ -218,7 +214,7 @@ export class ResetGitCommand extends QuickCommand<State> {
 				}),
 				createFlagsQuickPickItem<Flags>(state.flags, ['--hard'], {
 					label: `Hard ${this.title}`,
-					description: '⚠️ --hard \u2022 discards ALL changes',
+					description: '$(warning) --hard \u2022 discards ALL changes',
 					detail: `Will discard ALL changes and reset ${getReferenceLabel(context.destination)} to ${getReferenceLabel(
 						state.reference,
 					)}`,

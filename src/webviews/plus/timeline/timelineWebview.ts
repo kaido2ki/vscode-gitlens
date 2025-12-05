@@ -35,7 +35,8 @@ import {
 } from '../../../git/utils/revision.utils';
 import type { SubscriptionChangeEvent } from '../../../plus/gk/subscriptionService';
 import { Directive } from '../../../quickpicks/items/directive';
-import { ReferencesQuickPickIncludes, showReferencePicker2 } from '../../../quickpicks/referencePicker';
+import type { ReferencesQuickPickIncludes } from '../../../quickpicks/referencePicker';
+import { showReferencePicker2 } from '../../../quickpicks/referencePicker';
 import { getRepositoryPickerTitleAndPlaceholder, showRepositoryPicker2 } from '../../../quickpicks/repositoryPicker';
 import { showRevisionFilesPicker } from '../../../quickpicks/revisionFilesPicker';
 import { executeCommand, registerCommand } from '../../../system/-webview/command';
@@ -224,7 +225,7 @@ export class TimelineWebviewProvider implements WebviewProvider<State, State, Ti
 	}
 
 	includeBootstrap(_deferrable?: boolean): Promise<State> {
-		return this._cache.get('bootstrap', () => this.getState(this._context, false));
+		return this._cache.getOrCreate('bootstrap', () => this.getState(this._context, false));
 	}
 
 	registerCommands(): Disposable[] {
@@ -367,6 +368,11 @@ export class TimelineWebviewProvider implements WebviewProvider<State, State, Ti
 
 		let ref = e.params.type === 'base' ? scope.base : scope.head;
 
+		const include: ReferencesQuickPickIncludes[] = ['branches', 'tags', 'HEAD'];
+		if (!repo.virtual && !this._context.config.showAllBranches && e.params.type !== 'base') {
+			include.push('allBranches');
+		}
+
 		const pick = await showReferencePicker2(
 			repo.path,
 			e.params.type === 'base' ? 'Choose a Base Reference' : 'Choose a Head Reference',
@@ -376,12 +382,7 @@ export class TimelineWebviewProvider implements WebviewProvider<State, State, Ti
 			{
 				allowedAdditionalInput: { rev: true /*, range: true */ },
 				picked: ref?.ref,
-				include:
-					ReferencesQuickPickIncludes.BranchesAndTags |
-					ReferencesQuickPickIncludes.HEAD |
-					(!repo.virtual && !this._context.config.showAllBranches && e.params.type !== 'base'
-						? ReferencesQuickPickIncludes.AllBranches
-						: 0),
+				include: include,
 				sort: true,
 			},
 		);
@@ -1060,7 +1061,7 @@ export class TimelineWebviewProvider implements WebviewProvider<State, State, Ti
 	private async notifyDidChangeState() {
 		this._notifyDidChangeStateDebounced?.cancel();
 
-		const state = await this._cache.get('state', () => this.getState(this._context, true));
+		const state = await this._cache.getOrCreate('state', () => this.getState(this._context, true));
 		return this.host.notify(DidChangeNotification, { state: state });
 	}
 }
@@ -1138,7 +1139,7 @@ function generateRandomTimelineDataset(itemType: TimelineScopeType): TimelineDat
 	const count = 10;
 	for (let i = 0; i < count; i++) {
 		// Generate a random date between now and 3 months ago
-		const date = new Date(new Date().getTime() - Math.floor(Math.random() * (3 * 30 * 24 * 60 * 60 * 1000)));
+		const date = new Date(Date.now() - Math.floor(Math.random() * (3 * 30 * 24 * 60 * 60 * 1000)));
 		const author = authors[Math.floor(Math.random() * authors.length)];
 
 		// Generate random additions/deletions between 1 and 20, but ensure we have a tiny and large commit

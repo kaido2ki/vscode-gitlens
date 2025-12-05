@@ -1,14 +1,7 @@
 import { window } from 'vscode';
 import type { Container } from '../../../../container';
 import { CancellationError } from '../../../../errors';
-import {
-	ApplyPatchCommitError,
-	ApplyPatchCommitErrorReason,
-	CherryPickError,
-	CherryPickErrorReason,
-	StashPushError,
-	WorktreeCreateError,
-} from '../../../../git/errors';
+import { ApplyPatchCommitError, CherryPickError } from '../../../../git/errors';
 import type { GitPatchSubProvider } from '../../../../git/gitProvider';
 import type { GitCommit, GitCommitIdentityShape } from '../../../../git/models/commit';
 import { log } from '../../../../system/decorators/log';
@@ -59,13 +52,7 @@ export class PatchGitSubProvider implements GitPatchSubProvider {
 					await this.git.stash__push(repoPath, undefined, { includeUntracked: true });
 				} catch (ex) {
 					Logger.error(ex, scope);
-					throw new ApplyPatchCommitError(
-						ApplyPatchCommitErrorReason.StashFailed,
-						`Unable to apply patch; failed stashing working changes changes${
-							ex instanceof StashPushError ? `: ${ex.message}` : ''
-						}`,
-						ex,
-					);
+					throw new ApplyPatchCommitError({ reason: 'stashFailed' }, ex);
 				}
 			}
 		}
@@ -84,10 +71,7 @@ export class PatchGitSubProvider implements GitPatchSubProvider {
 		// worktree cannot be opened and we cannot handle issues elegantly.
 		if (options?.createWorktreePath != null) {
 			if (options?.branchName === null || options.branchName === currentBranch?.name) {
-				throw new ApplyPatchCommitError(
-					ApplyPatchCommitErrorReason.CreateWorktreeFailed,
-					'Unable to apply patch; failed creating worktree',
-				);
+				throw new ApplyPatchCommitError({ reason: 'createWorktreeFailed' });
 			}
 
 			try {
@@ -101,30 +85,26 @@ export class PatchGitSubProvider implements GitPatchSubProvider {
 					},
 				);
 				if (worktree == null) {
-					throw new ApplyPatchCommitError(
-						ApplyPatchCommitErrorReason.CreateWorktreeFailed,
-						'Unable to apply patch; failed creating worktree',
-					);
+					throw new ApplyPatchCommitError({ reason: 'createWorktreeFailed' });
 				}
 
 				targetPath = worktree.uri.fsPath;
 			} catch (ex) {
 				Logger.error(ex, scope);
-				throw new ApplyPatchCommitError(
-					ApplyPatchCommitErrorReason.CreateWorktreeFailed,
-					`Unable to apply patch; failed creating worktree${
-						ex instanceof WorktreeCreateError ? `: ${ex.message}` : ''
-					}`,
-					ex,
-				);
+				throw new ApplyPatchCommitError({ reason: 'createWorktreeFailed' }, ex);
 			}
 		}
 
 		if (options?.branchName != null && currentBranch?.name !== options.branchName) {
 			const checkoutRef = shouldCreate ? (currentBranch?.ref ?? 'HEAD') : options.branchName;
-			await this.provider.ops.checkout(targetPath, checkoutRef, {
-				createBranch: shouldCreate ? options.branchName : undefined,
-			});
+			try {
+				await this.provider.ops.checkout(targetPath, checkoutRef, {
+					createBranch: shouldCreate ? options.branchName : undefined,
+				});
+			} catch (ex) {
+				Logger.error(ex, scope);
+				throw new ApplyPatchCommitError({ reason: 'checkoutFailed', branch: options.branchName }, ex);
+			}
 		}
 
 		// Apply the patch using a cherry pick without committing
@@ -132,29 +112,15 @@ export class PatchGitSubProvider implements GitPatchSubProvider {
 			await this.provider.ops.cherryPick(targetPath, [rev], { noCommit: true });
 		} catch (ex) {
 			Logger.error(ex, scope);
-			if (ex instanceof CherryPickError) {
-				if (ex.reason === CherryPickErrorReason.Conflicts) {
-					throw new ApplyPatchCommitError(
-						ApplyPatchCommitErrorReason.AppliedWithConflicts,
-						`Patch applied with conflicts`,
-						ex,
-					);
-				}
-
-				if (ex.reason === CherryPickErrorReason.AbortedWouldOverwrite) {
-					throw new ApplyPatchCommitError(
-						ApplyPatchCommitErrorReason.ApplyAbortedWouldOverwrite,
-						`Unable to apply patch as some local changes would be overwritten`,
-						ex,
-					);
-				}
+			if (CherryPickError.is(ex, 'conflicts')) {
+				throw new ApplyPatchCommitError({ reason: 'appliedWithConflicts' }, ex);
 			}
 
-			throw new ApplyPatchCommitError(
-				ApplyPatchCommitErrorReason.ApplyFailed,
-				`Unable to apply patch${ex instanceof CherryPickError ? `: ${ex.message}` : ''}`,
-				ex,
-			);
+			if (CherryPickError.is(ex, 'wouldOverwriteChanges')) {
+				throw new ApplyPatchCommitError({ reason: 'wouldOverwriteChanges' }, ex);
+			}
+
+			throw new ApplyPatchCommitError({ reason: 'applyFailed' }, ex);
 		}
 	}
 

@@ -47,7 +47,7 @@ type GitSubProvidersForRepo = {
 };
 
 type IGitRepositoryService = GitSubProvidersForRepo & {
-	[K in Exclude<keyof GitRepositoryProvider, keyof GitSubProvidersForRepo>]: RemoveFirstArg<GitRepositoryProvider[K]>;
+	[K in Exclude<keyof GitRepositoryProvider, keyof GitSubProvidersForRepo>]: OmitFirstArg<GitRepositoryProvider[K]>;
 } & {
 	[K in Extract<
 		keyof GitProviderService,
@@ -57,7 +57,7 @@ type IGitRepositoryService = GitSubProvidersForRepo & {
 		| 'getRevisionUri'
 		| 'getWorkingUri'
 		| 'supports'
-	>]: RemoveFirstArg<GitProviderService[K]>;
+	>]: OmitFirstArg<GitProviderService[K]>;
 } & {
 	[K in Extract<keyof GitProviderService, 'getAbsoluteUri' | 'getRelativePath'>]: GitProviderService[K];
 };
@@ -211,11 +211,6 @@ export class GitRepositoryService implements IGitRepositoryService {
 	@log()
 	getWorkingUri(uri: Uri): Promise<Uri | undefined> {
 		return this._provider.getWorkingUri(this.path, uri);
-	}
-
-	@log({ args: false })
-	async runGitCommandViaTerminal(command: string, args: string[], options?: { execute?: boolean }): Promise<void> {
-		return this._provider.runGitCommandViaTerminal?.(this.path, command, args, options);
 	}
 
 	@debug({ exit: true })

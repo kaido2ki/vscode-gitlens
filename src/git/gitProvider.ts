@@ -41,12 +41,13 @@ import type { GitTreeEntry } from './models/tree';
 import type { GitUser } from './models/user';
 import type { GitWorktree } from './models/worktree';
 import type { RemoteProvider } from './remotes/remoteProvider';
-import type { GitGraphSearch } from './search';
+import type { GitGraphSearch, GitGraphSearchCursor, GitGraphSearchProgress, GitGraphSearchResults } from './search';
 import type { BranchSortOptions, TagSortOptions } from './utils/-webview/sorting';
 
 export type CachedGitTypes =
 	| 'branches'
 	| 'contributors'
+	| 'gitignore'
 	| 'providers'
 	| 'remotes'
 	| 'stashes'
@@ -155,14 +156,7 @@ export interface BranchContributionsOverview extends GitCommitStats<number> {
 
 export interface GitRepositoryProvider {
 	excludeIgnoredUris(repoPath: string, uris: Uri[]): Promise<Uri[]>;
-
 	getLastFetchedTimestamp(repoPath: string): Promise<number | undefined>;
-	runGitCommandViaTerminal?(
-		repoPath: string,
-		command: string,
-		args: string[],
-		options?: { execute?: boolean },
-	): Promise<void>;
 
 	branches: GitBranchesSubProvider;
 	commits: GitCommitsSubProvider;
@@ -221,8 +215,8 @@ export interface GitBranchesSubProvider {
 	): Promise<string | undefined>;
 
 	createBranch?(repoPath: string, name: string, sha: string, options?: { noTracking?: boolean }): Promise<void>;
-	deleteLocalBranch?(repoPath: string, name: string, options?: { force?: boolean }): Promise<void>;
-	deleteRemoteBranch?(repoPath: string, name: string, remote: string): Promise<void>;
+	deleteLocalBranch?(repoPath: string, names: string | string[], options?: { force?: boolean }): Promise<void>;
+	deleteRemoteBranch?(repoPath: string, names: string | string[], remote: string): Promise<void>;
 	/**
 	 * Returns whether a branch has been merged into another branch
 	 * @param repoPath The repository path
@@ -259,6 +253,8 @@ export interface GitBranchesSubProvider {
 	getStoredDetectedMergeTargetBranchName?(repoPath: string, ref: string): Promise<string | undefined>;
 	/** Gets the stored user merge target branch name */
 	getStoredUserMergeTargetBranchName?(repoPath: string, ref: string): Promise<string | undefined>;
+	onCurrentBranchAccessed?(repoPath: string): Promise<void>;
+	onCurrentBranchModified?(repoPath: string): Promise<void>;
 	renameBranch?(repoPath: string, oldName: string, newName: string): Promise<void>;
 	setUpstreamBranch?(repoPath: string, name: string, upstream: string | undefined): Promise<void>;
 	storeBaseBranchName?(repoPath: string, ref: string, base: string): Promise<void>;
@@ -393,6 +389,11 @@ export interface GitOperationsSubProvider {
 			remote?: string | undefined;
 		},
 	): Promise<void>;
+	merge(
+		repoPath: string,
+		ref: string,
+		options?: { fastForward?: boolean | 'only'; noCommit?: boolean; squash?: boolean },
+	): Promise<void>;
 	pull(
 		repoPath: string,
 		options?: {
@@ -409,11 +410,17 @@ export interface GitOperationsSubProvider {
 			publish?: { remote: string };
 		},
 	): Promise<void>;
+	rebase(
+		repoPath: string,
+		upstream: string,
+		options?: { autoStash?: boolean; branch?: string; interactive?: boolean; onto?: string },
+	): Promise<void>;
 	reset(
 		repoPath: string,
 		rev: string,
 		options?: { mode?: 'hard' | 'keep' | 'merge' | 'mixed' | 'soft' },
 	): Promise<void>;
+	revert(repoPath: string, refs: string[], options?: { editMessage?: boolean }): Promise<void>;
 }
 
 export interface GitPausedOperationsSubProvider {
@@ -531,6 +538,23 @@ export interface GitDiffSubProvider {
 }
 
 export interface GitGraphSubProvider {
+	/**
+	 * Gets the commit graph for a repository.
+	 *
+	 * @param repoPath - The repository path
+	 * @param rev - Optional revision/SHA to start from or find
+	 * @param asWebviewUri - Function to convert URIs for webview usage
+	 * @param options - Options including stats and limit (page size)
+	 * @param cancellation - Cancellation token
+	 *
+	 * **Behavior when `rev` is provided:**
+	 * - Finds the commit with the given revision/SHA
+	 * - Ensures at least `options.limit` commits are loaded (fills the page)
+	 * - If the SHA is found early, continues loading to reach the limit
+	 * - If the SHA is found late, loads all commits up to and including it
+	 *
+	 * This ensures the initial graph load always provides a full page of commits for good UX.
+	 */
 	getGraph(
 		repoPath: string,
 		rev: string | undefined,
@@ -543,7 +567,14 @@ export interface GitGraphSubProvider {
 		search: SearchQuery,
 		options?: { limit?: number; ordering?: 'date' | 'author-date' | 'topo' },
 		cancellation?: CancellationToken,
-	): Promise<GitGraphSearch>;
+	): AsyncGenerator<GitGraphSearchProgress, GitGraphSearch, void>;
+	continueSearchGraph(
+		repoPath: string,
+		cursor: GitGraphSearchCursor,
+		existingResults: GitGraphSearchResults,
+		options?: { limit?: number },
+		cancellation?: CancellationToken,
+	): AsyncGenerator<GitGraphSearchProgress, GitGraphSearch, void>;
 }
 
 export interface GitPatchSubProvider {
@@ -880,7 +911,7 @@ type GitSubProviders = {
 export type GitSubProvidersProps = keyof GitSubProviders;
 
 export type GitSubProviderForRepo<T extends GitSubProvider> = {
-	[K in keyof T]: RemoveFirstArg<T[K]>;
+	[K in keyof T]: OmitFirstArg<T[K]>;
 };
 
 export function createSubProviderProxyForRepo<T extends GitSubProvider, U extends GitSubProviderForRepo<T>>(

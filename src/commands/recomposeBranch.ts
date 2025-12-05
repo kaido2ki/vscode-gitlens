@@ -2,7 +2,7 @@ import { window } from 'vscode';
 import type { Sources } from '../constants.telemetry';
 import type { Container } from '../container';
 import { CommandQuickPickItem } from '../quickpicks/items/common';
-import { ReferencesQuickPickIncludes, showReferencePicker } from '../quickpicks/referencePicker';
+import { showReferencePicker2 } from '../quickpicks/referencePicker';
 import { getBestRepositoryOrShowPicker } from '../quickpicks/repositoryPicker';
 import { command, executeCommand } from '../system/-webview/command';
 import { getNodeRepoPath } from '../views/nodes/abstract/viewNode';
@@ -14,13 +14,14 @@ import { isCommandContextViewNodeHasBranch } from './commandContext.utils';
 export interface RecomposeBranchCommandArgs {
 	repoPath?: string;
 	branchName?: string;
+	commitShas?: string[];
 	source?: Sources;
 }
 
 @command()
 export class RecomposeBranchCommand extends GlCommandBase {
 	constructor(private readonly container: Container) {
-		super(['gitlens.recomposeBranch', 'gitlens.recomposeBranch:views']);
+		super(['gitlens.recomposeBranch', 'gitlens.recomposeBranch:views', 'gitlens.recomposeSelectedCommits']);
 	}
 
 	protected override preExecute(context: CommandContext, args?: RecomposeBranchCommandArgs): Promise<void> {
@@ -47,12 +48,18 @@ export class RecomposeBranchCommand extends GlCommandBase {
 			// Get branch name using picker fallback
 			let branchName = args.branchName;
 			if (!branchName) {
-				const pick = await showReferencePicker(repoPath, 'Recompose Branch', 'Choose a branch to recompose', {
-					include: ReferencesQuickPickIncludes.Branches,
-					sort: { branches: { current: true } },
-				});
-				if (pick == null || pick instanceof CommandQuickPickItem) return;
+				const result = await showReferencePicker2(
+					repoPath,
+					'Recompose Branch',
+					'Choose a branch to recompose',
+					{
+						include: ['branches'],
+						sort: { branches: { current: true } },
+					},
+				);
+				if (result.value == null || result.value instanceof CommandQuickPickItem) return;
 
+				const pick = result.value;
 				if (pick.refType === 'branch') {
 					branchName = pick.name;
 				} else {
@@ -86,6 +93,7 @@ export class RecomposeBranchCommand extends GlCommandBase {
 				source: args?.source,
 				mode: 'preview',
 				branchName: branchName,
+				commitShas: args?.commitShas,
 			});
 		} catch (ex) {
 			void window.showErrorMessage(`Failed to recompose branch: ${ex}`);

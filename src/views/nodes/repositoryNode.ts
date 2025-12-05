@@ -89,6 +89,8 @@ export class RepositoryNode extends SubscribeableViewNode<'repository', ViewsWit
 					`refs/heads/${status.branch}`,
 					true,
 					undefined,
+					undefined,
+					undefined,
 					status.sha,
 					status.upstream,
 					{ path: status.repoPath, isDefault: status.repoPath === defaultWorktreePath },
@@ -441,6 +443,8 @@ export class RepositoryNode extends SubscribeableViewNode<'repository', ViewsWit
 				RepositoryChange.Heads,
 				RepositoryChange.Opened,
 				RepositoryChange.PausedOperationStatus,
+				RepositoryChange.Starred,
+				RepositoryChange.Worktrees,
 				RepositoryChange.Unknown,
 				RepositoryChangeComparisonMode.Any,
 			)

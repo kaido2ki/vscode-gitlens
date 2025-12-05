@@ -304,8 +304,8 @@ export class CommitsPanel extends LitElement {
 				background: var(--vscode-input-background);
 				color: var(--vscode-input-foreground);
 				font-family: inherit;
-				font-size: 1rem;
-				line-height: 1.6rem;
+				font-size: 1.3rem;
+				line-height: 1.8rem;
 			}
 			textarea.auto-compose__instructions-input {
 				box-sizing: content-box;
@@ -369,7 +369,7 @@ export class CommitsPanel extends LitElement {
 	isPreviewMode: boolean = false;
 
 	@property({ type: Object })
-	recompose: { enabled: boolean; branchName?: string; locked: boolean } | null = null;
+	recompose: { enabled: boolean; branchName?: string; locked: boolean; commitIds?: string[] } | null = null;
 
 	@property({ type: Boolean })
 	canReorderCommits: boolean = true;
@@ -476,6 +476,40 @@ export class CommitsPanel extends LitElement {
 					name: 'commits',
 					pull: false,
 					put: false,
+				},
+				filter: (_evt, target) => {
+					const commitId = target.dataset.commitId;
+					if (!commitId) return false;
+					const commit = this.commits.find(c => c.id === commitId);
+					return commit?.locked === true;
+				},
+				onMove: evt => {
+					const draggedCommitId = evt.dragged.dataset.commitId;
+					const relatedCommitId = evt.related.dataset.commitId;
+
+					if (!draggedCommitId || !relatedCommitId) return true;
+
+					const relatedCommit = this.commits.find(c => c.id === relatedCommitId);
+
+					if (relatedCommit?.locked === true) {
+						return false;
+					}
+
+					const draggedIndex = this.commits.findIndex(c => c.id === draggedCommitId);
+					const relatedIndex = this.commits.findIndex(c => c.id === relatedCommitId);
+
+					if (draggedIndex === -1 || relatedIndex === -1) return true;
+
+					const start = Math.min(draggedIndex, relatedIndex);
+					const end = Math.max(draggedIndex, relatedIndex);
+
+					for (let i = start; i <= end; i++) {
+						if (this.commits[i].locked === true && this.commits[i].id !== draggedCommitId) {
+							return false;
+						}
+					}
+
+					return true;
 				},
 				onEnd: evt => {
 					if (evt.oldIndex !== undefined && evt.newIndex !== undefined && evt.oldIndex !== evt.newIndex) {
@@ -693,7 +727,9 @@ export class CommitsPanel extends LitElement {
 
 	private get firstCommitWithoutMessage(): ComposerCommit | null {
 		// Find the first commit that doesn't have a message
-		return this.commits.find(commit => !commit.message || commit.message.trim().length === 0) || null;
+		return (
+			this.commits.find(commit => !commit.message.content || commit.message.content.trim().length === 0) || null
+		);
 	}
 
 	private get shouldShowAddToDraftButton(): boolean {
@@ -1149,7 +1185,9 @@ export class CommitsPanel extends LitElement {
 								${this.generating
 									? 'Generating Commits...'
 									: this.hasUsedAutoCompose || this.isRecomposeLocked
-										? 'Recompose Commits'
+										? this.selectedCommitIds.size > 1
+											? 'Recompose Selected Commits'
+											: 'Recompose Commits'
 										: 'Auto-Compose Commits'}
 							</gl-button>
 						`,
@@ -1343,14 +1381,16 @@ export class CommitsPanel extends LitElement {
 									return html`
 										<gl-commit-item
 											.commitId=${commit.id}
-											.message=${commit.message}
+											.message=${commit.message.content}
 											.fileCount=${getFileCountForCommit(commit, this.hunks)}
 											.additions=${changes.additions}
 											.deletions=${changes.deletions}
-											.selected=${this.selectedCommitId === commit.id}
-											.multiSelected=${this.selectedCommitIds.has(commit.id)}
+											.selected=${this.selectedCommitIds.has(commit.id)}
+											.multiSelected=${this.selectedCommitIds.size > 1 &&
+											this.selectedCommitIds.has(commit.id)}
 											.isPreviewMode=${this.isPreviewMode}
 											.isRecomposeLocked=${this.isRecomposeLocked}
+											.locked=${commit.locked === true}
 											?first=${i === 0}
 											?last=${i === this.commits.length - 1 && !this.baseCommit}
 											@click=${(e: MouseEvent) => this.dispatchCommitSelect(commit.id, e)}
@@ -1371,7 +1411,7 @@ export class CommitsPanel extends LitElement {
 								<div class="composer-item__body">
 									<span class="repo-name">${this.repoName || 'Repository'}</span>
 									${this.baseCommit?.branchName
-										? html`<span>/</span
+										? html`<span>/ </span
 												><span class="branch-name">${this.baseCommit.branchName}</span>`
 										: ''}
 								</div>

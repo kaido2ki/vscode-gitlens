@@ -15,6 +15,7 @@ import { getBranchMergeTargetName } from '../../../git/utils/-webview/branch.uti
 import { sendFeedbackEvent, showUnhelpfulFeedbackPicker } from '../../../plus/ai/aiFeedbackUtils';
 import type { AIModelChangeEvent } from '../../../plus/ai/aiProviderService';
 import { getRepositoryPickerTitleAndPlaceholder, showRepositoryPicker } from '../../../quickpicks/repositoryPicker';
+import { executeCoreCommand } from '../../../system/-webview/command';
 import { configuration } from '../../../system/-webview/configuration';
 import { getContext, onDidChangeContext } from '../../../system/-webview/context';
 import { getSettledValue } from '../../../system/promise';
@@ -115,7 +116,7 @@ export class ComposerWebviewProvider implements WebviewProvider<State, State, Co
 	private _safetyState: ComposerSafetyState;
 
 	// Branch mode state
-	private _recompose: { enabled: boolean; branchName?: string; locked: boolean } | null = null;
+	private _recompose: { enabled: boolean; branchName?: string; locked: boolean; commitShas?: string[] } | null = null;
 
 	// Telemetry context - tracks composer-specific data for getTelemetryContext
 	private _context: ComposerContext;
@@ -270,7 +271,7 @@ export class ComposerWebviewProvider implements WebviewProvider<State, State, Co
 	}
 
 	includeBootstrap(_deferrable?: boolean): Promise<State> {
-		return this._cache.get('bootstrap', () => this.getBootstrapState());
+		return this._cache.getOrCreate('bootstrap', () => this.getBootstrapState());
 	}
 
 	private async getBootstrapState(): Promise<State> {
@@ -300,7 +301,13 @@ export class ComposerWebviewProvider implements WebviewProvider<State, State, Co
 
 		// Check if this is branch mode
 		if (args?.branchName) {
-			return this.initializeStateAndContextFromBranch(repo, args.branchName, args.mode, args.source);
+			return this.initializeStateAndContextFromBranch(
+				repo,
+				args.branchName,
+				args.mode,
+				args.source,
+				args.commitShas,
+			);
 		}
 
 		return this.initializeStateAndContextFromWorkingDirectory(
@@ -328,6 +335,7 @@ export class ComposerWebviewProvider implements WebviewProvider<State, State, Co
 		branchName?: string,
 		mode: 'experimental' | 'preview' = 'preview',
 		source?: Sources,
+		commitShas?: string[],
 		isReload?: boolean,
 	): Promise<State> {
 		this._currentRepository = repo;
@@ -339,8 +347,18 @@ export class ComposerWebviewProvider implements WebviewProvider<State, State, Co
 			this._recompose = {
 				enabled: true,
 				branchName: branchName,
-				locked: true, // Initially locked - will be unlocked after auto-compose
+				locked: true,
+				commitShas: commitShas,
 			};
+		}
+
+		if (commitShas && commitShas.length > 0) {
+			const recomposeSet = new Set(commitShas);
+			for (const commit of commits) {
+				if (commit.sha && !recomposeSet.has(commit.sha)) {
+					commit.locked = true;
+				}
+			}
 		}
 
 		const aiEnabled = this.getAiEnabled();
@@ -452,7 +470,7 @@ export class ComposerWebviewProvider implements WebviewProvider<State, State, Co
 
 		const initialCommit = {
 			id: 'draft-commit-1',
-			message: '', // Empty message - user will add their own
+			message: { content: '', isGenerated: false },
 			aiExplanation: '',
 			hunkIndices: initialHunkIndices,
 		};
@@ -484,6 +502,7 @@ export class ComposerWebviewProvider implements WebviewProvider<State, State, Co
 			undefined,
 			mode,
 			source,
+			undefined,
 			isReload,
 		);
 	}
@@ -493,6 +512,7 @@ export class ComposerWebviewProvider implements WebviewProvider<State, State, Co
 		branchName: string,
 		mode: 'experimental' | 'preview' = 'preview',
 		source?: Sources,
+		commitShas?: string[],
 		isReload?: boolean,
 	): Promise<State> {
 		// Get the branch
@@ -541,6 +561,21 @@ export class ComposerWebviewProvider implements WebviewProvider<State, State, Co
 					}
 
 					const { commits, hunks } = composerData;
+
+					// Ensure that if commitShas is provided, error out if any of the commit shas are not found in the commits
+					if (commitShas) {
+						const commitShasSet = new Set(commitShas);
+						const missingShas = [...commitShasSet].filter(sha => !commits.find(c => c.sha === sha));
+						if (missingShas.length > 0) {
+							return {
+								...this.initialState,
+								loadingError: `The following commit shas were not found in the commits for branch '${branchName}': ${missingShas.join(
+									', ',
+								)}`,
+							};
+						}
+					}
+
 					const diffs = (await getComposerDiffs(repo, { baseSha: baseCommit.sha, headSha: headCommitSha }))!;
 
 					// Return successful state with found commits
@@ -559,6 +594,7 @@ export class ComposerWebviewProvider implements WebviewProvider<State, State, Co
 						currentMergeTargetBranchName,
 						mode,
 						source,
+						commitShas,
 						isReload,
 					);
 				}
@@ -695,6 +731,7 @@ export class ComposerWebviewProvider implements WebviewProvider<State, State, Co
 						this._recompose.branchName,
 						params.mode,
 						params.source,
+						this._recompose.commitShas,
 						true,
 					)
 				: await this.initializeStateAndContextFromWorkingDirectory(
@@ -979,10 +1016,17 @@ export class ComposerWebviewProvider implements WebviewProvider<State, State, Co
 			if (this._recompose?.enabled && this._safetyState?.hashes.commits) {
 				// In recompose mode, we need to break down the commit history and use the combined diff to generate new hunks
 				// before sending them off to the AI service to compose new commits
+				const baseSha = params.commitsToReplace?.baseShaForNewDiff ?? this._safetyState.baseSha!;
+				let headSha = this._safetyState.headSha!;
+				if (params.commitsToReplace?.commits?.length) {
+					headSha =
+						params.commitsToReplace.commits[params.commitsToReplace.commits.length - 1].sha ??
+						this._safetyState.headSha!;
+				}
 				const combinedDiff = await calculateCombinedDiffBetweenCommits(
 					this._currentRepository!,
-					this._safetyState.baseSha!,
-					this._safetyState.headSha!,
+					baseSha,
+					headSha,
 				);
 
 				const combinedHunks = createHunksFromDiffs(combinedDiff!.contents);
@@ -992,7 +1036,24 @@ export class ComposerWebviewProvider implements WebviewProvider<State, State, Co
 					hunk.coAuthors = coAuthors.length ? coAuthors : undefined;
 					hunks.push({ ...hunk, assigned: true });
 				}
-				this._hunks = hunks;
+
+				// Update the hunks. Note that if params.commitsToReplace is defined, then we need to remove all the hunks with indices that match the hunkIndices of the commits to replace, then add in the new hunks and
+				// reinder all of the hunks. Otherwise, we just replace the existing hunks with the new ones
+				if (params.commitsToReplace) {
+					const hunkIndicesToRemove = new Set(params.commitsToReplace.commits.flatMap(c => c.hunkIndices));
+					this._hunks = this._hunks.filter(h => !hunkIndicesToRemove.has(h.index));
+					// Reindex the hunks
+					let newIndexCounter = 1;
+					this._hunks.forEach(hunk => {
+						hunk.index = newIndexCounter++;
+					});
+					hunks.forEach(hunk => {
+						hunk.index = newIndexCounter++;
+					});
+					this._hunks.push(...hunks);
+				} else {
+					this._hunks = hunks;
+				}
 			} else {
 				// Working directory mode: use existing hunks
 				for (const index of params.hunkIndices) {
@@ -1002,16 +1063,16 @@ export class ComposerWebviewProvider implements WebviewProvider<State, State, Co
 
 			const existingCommits = params.commits.map(commit => ({
 				id: commit.id,
-				message: commit.message,
+				message: commit.message.content,
 				aiExplanation: commit.aiExplanation,
 				hunkIndices: commit.hunkIndices,
 			}));
 
 			// Call the AI service
-			const result = await this.container.ai.generateCommits(
+			const result = await this.container.ai.actions.generateCommits(
 				hunks,
 				existingCommits,
-				this._hunks.map(m => ({ index: m.index, hunkHeader: m.hunkHeader })),
+				hunks.map(m => ({ index: m.index, hunkHeader: m.hunkHeader })),
 				{ source: 'composer', correlationId: this.host.instanceId },
 				{
 					cancellation: this._generateCommitsCancellation.token,
@@ -1054,7 +1115,7 @@ export class ComposerWebviewProvider implements WebviewProvider<State, State, Co
 				// Transform AI result back to ComposerCommit format
 				const newCommits = result.commits.map((commit, index) => ({
 					id: `ai-commit-${index}`,
-					message: commit.message,
+					message: { content: commit.message, isGenerated: true },
 					aiExplanation: commit.explanation,
 					hunkIndices: commit.hunks.map(h => h.hunk),
 				}));
@@ -1075,6 +1136,7 @@ export class ComposerWebviewProvider implements WebviewProvider<State, State, Co
 					commits: newCommits,
 					// In recompose mode, we generated a new combined diff and hunks, so we need to pass the hunks back to state
 					hunks: this._recompose?.enabled ? this._hunks : undefined,
+					replacedCommitIds: params.commitsToReplace?.commits.map(c => c.id),
 				});
 			} else if (result === 'cancelled') {
 				this._context.operations.generateCommits.cancelledCount++;
@@ -1175,7 +1237,7 @@ export class ComposerWebviewProvider implements WebviewProvider<State, State, Co
 			}
 
 			// Call the AI service to generate commit message
-			const result = await this.container.ai.generateCommitMessage(
+			const result = await this.container.ai.actions.generateCommitMessage(
 				patch,
 				{ source: 'composer', correlationId: this.host.instanceId },
 				{
@@ -1195,9 +1257,9 @@ export class ComposerWebviewProvider implements WebviewProvider<State, State, Co
 
 			if (result && result !== 'cancelled') {
 				// Combine summary and body into a single message
-				const message = result.parsed.body
-					? `${result.parsed.summary}\n\n${result.parsed.body}`
-					: result.parsed.summary;
+				const message = result.result.body
+					? `${result.result.summary}\n\n${result.result.body}`
+					: result.result.summary;
 
 				// Notify the webview with the generated commit message
 				this.sendTelemetryEvent('composer/action/generateCommitMessage', eventData);
@@ -1549,5 +1611,34 @@ export class ComposerWebviewProvider implements WebviewProvider<State, State, Co
 			...this.getTelemetryContext(),
 			...data,
 		});
+	}
+
+	private _panelWasVisible: boolean | undefined;
+	private _isMaximized = false;
+
+	async maximize(): Promise<void> {
+		if (this._isMaximized) {
+			// Restore panel if it was previously visible
+			if (this._panelWasVisible) {
+				await executeCoreCommand('workbench.action.togglePanel');
+			}
+			this._isMaximized = false;
+			this._panelWasVisible = undefined;
+		} else {
+			// Check panel visibility by querying the workbench state
+			// We'll use a workaround: check if the panel is focused
+			try {
+				// Try to focus the panel - if it succeeds, panel was visible
+				await executeCoreCommand('workbench.action.focusPanel');
+				this._panelWasVisible = true;
+				// Now hide it
+				await executeCoreCommand('workbench.action.togglePanel');
+			} catch {
+				// If focusing failed, panel wasn't visible
+				this._panelWasVisible = false;
+			}
+
+			this._isMaximized = true;
+		}
 	}
 }

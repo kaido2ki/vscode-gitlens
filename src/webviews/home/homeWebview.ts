@@ -25,6 +25,7 @@ import { openComparisonChanges } from '../../git/actions/commit';
 import { abortPausedOperation, continuePausedOperation, skipPausedOperation } from '../../git/actions/pausedOperation';
 import * as RepoActions from '../../git/actions/repository';
 import { revealWorktree } from '../../git/actions/worktree';
+import { PushError } from '../../git/errors';
 import type { BranchContributionsOverview } from '../../git/gitProvider';
 import type { GitBranch } from '../../git/models/branch';
 import type { GitFileChangeShape } from '../../git/models/fileChange';
@@ -47,6 +48,7 @@ import { getOpenedWorktreesByBranch, groupWorktreesByBranch } from '../../git/ut
 import { getBranchNameWithoutRemote } from '../../git/utils/branch.utils';
 import { getComparisonRefsForPullRequest } from '../../git/utils/pullRequest.utils';
 import { createRevisionRange } from '../../git/utils/revision.utils';
+import { showGitErrorMessage } from '../../messages';
 import type { AIModelChangeEvent } from '../../plus/ai/aiProviderService';
 import { showPatchesView } from '../../plus/drafts/actions';
 import type { Subscription } from '../../plus/gk/models/subscription';
@@ -55,6 +57,7 @@ import { isMcpBannerEnabled, mcpExtensionRegistrationAllowed } from '../../plus/
 import { isAiAllAccessPromotionActive } from '../../plus/gk/utils/-webview/promo.utils';
 import { isSubscriptionTrialOrPaidFromState } from '../../plus/gk/utils/subscription.utils';
 import type { ConfiguredIntegrationsChangeEvent } from '../../plus/integrations/authentication/configuredIntegrationService';
+import type { ConnectionStateChangeEvent } from '../../plus/integrations/integrationService';
 import { providersMetadata } from '../../plus/integrations/providers/models';
 import type { LaunchpadCategorizedResult } from '../../plus/launchpad/launchpadProvider';
 import { getLaunchpadItemGroups } from '../../plus/launchpad/launchpadProvider';
@@ -179,6 +182,7 @@ export class HomeWebviewProvider implements WebviewProvider<State, State, HomeWe
 			this.container.subscription.onDidChange(this.onSubscriptionChanged, this),
 			onDidChangeContext(this.onContextChanged, this),
 			this.container.integrations.onDidChange(this.onIntegrationsChanged, this),
+			this.container.integrations.onDidChangeConnectionState(this.onIntegrationConnectionStateChanged, this),
 			this.container.walkthrough.onDidChangeProgress(this.onWalkthroughProgressChanged, this),
 			configuration.onDidChange(this.onDidChangeConfig, this),
 			this.container.launchpad.onDidChange(this.onLaunchpadChanged, this),
@@ -251,6 +255,10 @@ export class HomeWebviewProvider implements WebviewProvider<State, State, HomeWe
 	}
 
 	private onIntegrationsChanged(_e: ConfiguredIntegrationsChangeEvent) {
+		void this.notifyDidChangeIntegrations();
+	}
+
+	private onIntegrationConnectionStateChanged(_e: ConnectionStateChangeEvent) {
 		void this.notifyDidChangeIntegrations();
 	}
 
@@ -389,10 +397,10 @@ export class HomeWebviewProvider implements WebviewProvider<State, State, HomeWe
 			registerCommand('gitlens.home.rebaseCurrentOnto', this.rebaseCurrentOnto, this),
 			registerCommand('gitlens.home.startWork', this.startWork, this),
 			registerCommand('gitlens.home.createCloudPatch', this.createCloudPatch, this),
-			registerCommand('gitlens.home.skipPausedOperation', this.skipPausedOperation, this),
-			registerCommand('gitlens.home.continuePausedOperation', this.continuePausedOperation, this),
-			registerCommand('gitlens.home.abortPausedOperation', this.abortPausedOperation, this),
-			registerCommand('gitlens.home.openRebaseEditor', this.openRebaseEditor, this),
+			registerCommand('gitlens.pausedOperation.skip:home', this.skipPausedOperation, this),
+			registerCommand('gitlens.pausedOperation.continue:home', this.continuePausedOperation, this),
+			registerCommand('gitlens.pausedOperation.abort:home', this.abortPausedOperation, this),
+			registerCommand('gitlens.pausedOperation.open:home', this.openRebaseEditor, this),
 			registerCommand('gitlens.home.enableAi', this.enableAi, this),
 			registerCommand('gitlens.ai.explainWip:home', this.explainWip, this),
 			registerCommand('gitlens.ai.explainBranch:home', this.explainBranch, this),
@@ -1088,6 +1096,8 @@ export class HomeWebviewProvider implements WebviewProvider<State, State, HomeWe
 						// RepositoryChange.Index,
 						RepositoryChange.Remotes,
 						RepositoryChange.PausedOperationStatus,
+						RepositoryChange.Starred,
+						RepositoryChange.Worktrees,
 						RepositoryChange.Unknown,
 						RepositoryChangeComparisonMode.Any,
 					)
@@ -1396,7 +1406,12 @@ export class HomeWebviewProvider implements WebviewProvider<State, State, HomeWe
 			);
 			if (confirm?.title !== 'Continue') return;
 
-			await this.container.git.getRepositoryService(ref.repoPath).ops?.checkout(mergeTargetLocalBranchName);
+			try {
+				await this.container.git.getRepositoryService(ref.repoPath).ops?.checkout(mergeTargetLocalBranchName);
+			} catch (ex) {
+				void showGitErrorMessage(ex, `Unable to switch to branch '${mergeTargetLocalBranchName}'`);
+				return;
+			}
 
 			void executeGitCommand({
 				command: 'branch',
@@ -1457,22 +1472,30 @@ export class HomeWebviewProvider implements WebviewProvider<State, State, HomeWe
 	@log<HomeWebviewProvider['pushBranch']>({
 		args: { 0: r => `${r.branchId}, upstream: ${r.branchUpstreamName}` },
 	})
-	private pushBranch(ref: BranchRef) {
-		void this.container.git.getRepositoryService(ref.repoPath).ops?.push({
-			reference: {
-				name: ref.branchName,
-				ref: ref.branchId,
-				refType: 'branch',
-				remote: false,
-				repoPath: ref.repoPath,
-				upstream: ref.branchUpstreamName
-					? {
-							name: ref.branchUpstreamName,
-							missing: false,
-						}
-					: undefined,
-			},
-		});
+	private async pushBranch(ref: BranchRef) {
+		try {
+			await this.container.git.getRepositoryService(ref.repoPath).ops?.push({
+				reference: {
+					name: ref.branchName,
+					ref: ref.branchId,
+					refType: 'branch',
+					remote: false,
+					repoPath: ref.repoPath,
+					upstream: ref.branchUpstreamName
+						? {
+								name: ref.branchUpstreamName,
+								missing: false,
+							}
+						: undefined,
+				},
+			});
+		} catch (ex) {
+			if (PushError.is(ex)) {
+				void showGitErrorMessage(ex);
+			} else {
+				void showGitErrorMessage(ex, 'Unable to push branch');
+			}
+		}
 	}
 
 	@log<HomeWebviewProvider['mergeTargetCompare']>({

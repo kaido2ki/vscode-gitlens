@@ -1,18 +1,21 @@
-import { ThemeIcon } from 'vscode';
+import { ThemeIcon, window } from 'vscode';
 import type { Container } from '../../container';
+import { RebaseError } from '../../git/errors';
 import type { GitBranch } from '../../git/models/branch';
 import type { GitLog } from '../../git/models/log';
 import type { GitReference } from '../../git/models/reference';
 import type { Repository } from '../../git/models/repository';
 import { getReferenceLabel, isRevisionReference } from '../../git/utils/reference.utils';
 import { createRevisionRange } from '../../git/utils/revision.utils';
+import { showGitErrorMessage } from '../../messages';
 import { isSubscriptionTrialOrPaidFromState } from '../../plus/gk/utils/subscription.utils';
 import { createQuickPickSeparator } from '../../quickpicks/items/common';
 import type { DirectiveQuickPickItem } from '../../quickpicks/items/directive';
 import { createDirectiveQuickPickItem, Directive } from '../../quickpicks/items/directive';
 import type { FlagsQuickPickItem } from '../../quickpicks/items/flags';
 import { createFlagsQuickPickItem } from '../../quickpicks/items/flags';
-import { getHostEditorCommand } from '../../system/-webview/vscode';
+import { executeCommand } from '../../system/-webview/command';
+import { Logger } from '../../system/logger';
 import { pluralize } from '../../system/string';
 import type { ViewsWithRepositoryFolders } from '../../views/viewBase';
 import type {
@@ -83,15 +86,47 @@ export class RebaseGitCommand extends QuickCommand<State> {
 	}
 
 	private async execute(state: RebaseStepState) {
-		let configs: string[] | undefined;
-		if (state.flags.includes('--interactive')) {
+		const interactive = state.flags.includes('--interactive');
+		if (interactive) {
 			await this.container.rebaseEditor.enableForNextUse();
-
-			const editor = await getHostEditorCommand();
-			configs = ['-c', `"sequence.editor=${editor}"`];
 		}
 
-		state.repo.rebase(configs, ...state.flags, state.destination.ref);
+		try {
+			await state.repo.git.ops?.rebase?.(state.destination.ref, { interactive: interactive });
+		} catch (ex) {
+			// Don't show an error message if the user intentionally aborted the rebase
+			if (RebaseError.is(ex, 'aborted')) {
+				Logger.log(ex.message, this.title);
+				return;
+			}
+
+			Logger.error(ex, this.title);
+
+			if (RebaseError.is(ex, 'uncommittedChanges') || RebaseError.is(ex, 'wouldOverwriteChanges')) {
+				void window.showWarningMessage(
+					'Unable to rebase. Your local changes would be overwritten. Please commit or stash your changes before trying again.',
+				);
+				return;
+			}
+
+			if (RebaseError.is(ex, 'conflicts')) {
+				void window.showWarningMessage(
+					'Unable to rebase due to conflicts. Resolve the conflicts before continuing, or abort the rebase.',
+				);
+				void executeCommand('gitlens.showCommitsView');
+				return;
+			}
+
+			if (RebaseError.is(ex, 'alreadyInProgress')) {
+				void window.showWarningMessage(
+					'Unable to rebase. A rebase is already in progress. Continue or abort the current rebase first.',
+				);
+				void executeCommand('gitlens.showCommitsView');
+				return;
+			}
+
+			void showGitErrorMessage(ex, RebaseError.is(ex) ? undefined : 'Unable to rebase');
+		}
 	}
 
 	protected async *steps(state: PartialStepState<State>): StepGenerator {
@@ -314,7 +349,12 @@ export class RebaseGitCommand extends QuickCommand<State> {
 
 				if (step.quickpick != null) {
 					const active = step.quickpick.activeItems;
-					step.quickpick.items = [...notices, ...items];
+					step.quickpick.items = [
+						...notices,
+						...items,
+						createQuickPickSeparator(),
+						createDirectiveQuickPickItem(Directive.Cancel),
+					];
 					step.quickpick.activeItems = active;
 				}
 			});

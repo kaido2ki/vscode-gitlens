@@ -7,7 +7,7 @@ import type { Sources, WebviewTelemetryContext } from '../../../constants.teleme
 import type { Container } from '../../../container';
 import { CancellationError } from '../../../errors';
 import { openChanges, openChangesWithWorking, openFile } from '../../../git/actions/commit';
-import { ApplyPatchCommitError, ApplyPatchCommitErrorReason } from '../../../git/errors';
+import { ApplyPatchCommitError } from '../../../git/errors';
 import type { RepositoriesChangeEvent } from '../../../git/gitProviderService';
 import type { GitCommit } from '../../../git/models/commit';
 import { GitFileChange } from '../../../git/models/fileChange';
@@ -18,6 +18,7 @@ import type { GkRepositoryId } from '../../../git/models/repositoryIdentities';
 import { uncommitted, uncommittedStaged } from '../../../git/models/revision';
 import { createReference } from '../../../git/utils/reference.utils';
 import { shortenRevision } from '../../../git/utils/revision.utils';
+import { showGitErrorMessage } from '../../../messages';
 import { showPatchesView } from '../../../plus/drafts/actions';
 import { getDraftEntityIdentifier } from '../../../plus/drafts/draftsService';
 import type {
@@ -36,7 +37,7 @@ import type { OrganizationMember } from '../../../plus/gk/models/organization';
 import { ensureAccount } from '../../../plus/gk/utils/-webview/acount.utils';
 import { showNewOrSelectBranchPicker } from '../../../quickpicks/branchPicker';
 import { showOrganizationMembersPicker } from '../../../quickpicks/organizationMembersPicker';
-import { ReferencesQuickPickIncludes, showReferencePicker } from '../../../quickpicks/referencePicker';
+import { showReferencePicker2 } from '../../../quickpicks/referencePicker';
 import { executeCommand, registerCommand } from '../../../system/-webview/command';
 import { configuration } from '../../../system/-webview/configuration';
 import { getContext, onDidChangeContext, setContext } from '../../../system/-webview/context';
@@ -500,14 +501,12 @@ export class PatchDetailsWebviewProvider
 			} catch (ex) {
 				if (ex instanceof CancellationError) return;
 
-				if (ex instanceof ApplyPatchCommitError) {
-					if (ex.reason === ApplyPatchCommitErrorReason.AppliedWithConflicts) {
-						void window.showWarningMessage('Patch applied with conflicts');
-					} else {
-						void window.showErrorMessage(ex.message);
-					}
+				if (ApplyPatchCommitError.is(ex, 'appliedWithConflicts')) {
+					void window.showWarningMessage('Patch applied with conflicts');
+				} else if (ApplyPatchCommitError.is(ex)) {
+					void showGitErrorMessage(ex);
 				} else {
-					void window.showErrorMessage(`Unable to apply patch onto '${patch.baseRef}': ${ex.message}`);
+					void showGitErrorMessage(ex, `Unable to apply patch onto '${patch.baseRef}': ${ex.message}`);
 				}
 			}
 		}
@@ -832,7 +831,7 @@ export class PatchDetailsWebviewProvider
 			const commit = await this.getOrCreateCommitForPatch(patch.gkRepositoryId);
 			if (commit == null) throw new Error('Unable to find commit');
 
-			const deferredResult = await this.container.ai.explainCommit(
+			const deferredResult = await this.container.ai.actions.explainCommit(
 				commit,
 				{ source: 'patchDetails', context: { type: `draft-${this._context.draft.type}` } },
 				{ progress: { location: { viewId: this.host.id } } },
@@ -848,7 +847,7 @@ export class PatchDetailsWebviewProvider
 
 			if (result == null) throw new Error('Error retrieving content');
 
-			params = { result: result.parsed };
+			params = { result: result.result };
 		} catch (ex) {
 			debugger;
 			params = { error: { message: ex.message } };
@@ -883,7 +882,7 @@ export class PatchDetailsWebviewProvider
 			// const commit = await this.getOrCreateCommitForPatch(patch.gkRepositoryId);
 			// if (commit == null) throw new Error('Unable to find commit');
 
-			const result = await this.container.ai.generateCreateDraft(
+			const result = await this.container.ai.actions.generateCreateDraft(
 				repo,
 				{ source: 'patchDetails', context: { type: 'patch' } },
 				{ progress: { location: { viewId: this.host.id } } },
@@ -893,8 +892,8 @@ export class PatchDetailsWebviewProvider
 			if (result == null) throw new Error('Error retrieving content');
 
 			params = {
-				title: result.parsed.summary,
-				description: result.parsed.body,
+				title: result.result.summary,
+				description: result.result.body,
 			};
 		} catch (ex) {
 			debugger;
@@ -1492,19 +1491,18 @@ export class PatchDetailsWebviewProvider
 						// }
 
 						if (result === chooseBase) {
-							const ref = await showReferencePicker(
+							const pick = await showReferencePicker2(
 								repo.path,
 								`Choose New Base for Patch`,
 								`Choose a new base to apply the patch onto`,
 								{
 									allowedAdditionalInput: { rev: true },
-									include:
-										ReferencesQuickPickIncludes.BranchesAndTags | ReferencesQuickPickIncludes.HEAD,
+									include: ['branches', 'tags', 'HEAD'],
 								},
 							);
-							if (ref == null) break;
+							if (pick.value == null) break;
 
-							baseRef = ref.ref;
+							baseRef = pick.value.ref;
 							continue;
 						}
 					} else {

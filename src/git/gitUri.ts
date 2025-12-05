@@ -1,14 +1,16 @@
 import { Uri } from 'vscode';
+import { realpath } from '@env/fs';
 import { getQueryDataFromScmGitUri } from '../@types/vscode.git.uri';
 import { Schemes } from '../constants';
 import { Container } from '../container';
 import type { GitHubAuthorityMetadata } from '../plus/remotehub';
+import { configuration } from '../system/-webview/configuration';
 import { formatPath } from '../system/-webview/formatPath';
 import { getBestPath, relativeDir, splitPath } from '../system/-webview/path';
 import { isVirtualUri } from '../system/-webview/vscode/uris';
 import { debug } from '../system/decorators/log';
 import { memoize } from '../system/decorators/memoize';
-import { basename, normalizePath } from '../system/path';
+import { arePathsEqual, basename, normalizePath } from '../system/path';
 import type { UriComponents } from '../system/uri';
 import { areUrisEqual } from '../system/uri';
 import type { RevisionUriData } from './gitProvider';
@@ -248,6 +250,19 @@ export class GitUri extends (Uri as any as UriEx) {
 	@debug({ exit: true })
 	static async fromUri(uri: Uri): Promise<GitUri> {
 		if (isGitUri(uri)) return uri;
+
+		// Check for symbolic links
+		if (uri.scheme === Schemes.File && configuration.get('advanced.resolveSymlinks')) {
+			try {
+				const realPath = await realpath(uri.fsPath);
+				if (!arePathsEqual(uri.fsPath, realPath)) {
+					uri = Uri.file(realPath);
+				}
+			} catch {
+				// Ignore errors (e.g., if path doesn't exist)
+			}
+		}
+
 		if (!Container.instance.git.isTrackable(uri)) return new GitUri(uri);
 		if (uri.scheme === Schemes.GitLens) return new GitUri(uri);
 

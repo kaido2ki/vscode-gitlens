@@ -28,12 +28,18 @@ export interface ComposerHunkBase {
 	coAuthors?: GitCommitIdentityShape[]; // Co-authors of the commit this hunk belongs to, if any
 }
 
+export interface ComposerCommitMessage {
+	content: string;
+	isGenerated: boolean;
+}
+
 export interface ComposerCommit {
 	id: string;
-	message: string;
+	message: ComposerCommitMessage;
 	sha?: string; // Optional SHA for existing commits
 	aiExplanation?: string;
 	hunkIndices: number[]; // References to hunk indices in the hunk map
+	locked?: boolean; // True if this commit is fully locked (cannot be reordered, edited, or have hunks reassigned)
 }
 
 // Remove callbacks - use IPC instead
@@ -74,10 +80,6 @@ export interface State extends WebviewState<'gitlens.composer'> {
 	baseCommit: ComposerBaseCommit | null;
 
 	// UI state
-	selectedCommitId: string | null;
-	selectedCommitIds: Set<string>;
-	selectedUnassignedSection: string | null;
-	selectedHunkIds: Set<string>;
 	detailsSectionExpanded: {
 		commitMessage: boolean;
 		aiExplanation: boolean;
@@ -104,6 +106,7 @@ export interface State extends WebviewState<'gitlens.composer'> {
 		enabled: boolean; // true if composer is in recompose mode
 		branchName?: string; // name of the branch being recomposed
 		locked: boolean; // true if commits are locked (cannot be reordered/edited)
+		commitShas?: string[]; // Optional: specific commit SHAs selected for recompose (if not all commits)
 	} | null;
 
 	// AI settings
@@ -126,10 +129,6 @@ export const initialState: Omit<State, keyof WebviewState<'gitlens.composer'>> =
 	hunks: [],
 	commits: [],
 	baseCommit: null,
-	selectedCommitId: null,
-	selectedCommitIds: new Set<string>(),
-	selectedUnassignedSection: null,
-	selectedHunkIds: new Set<string>(),
 	detailsSectionExpanded: {
 		commitMessage: true,
 		aiExplanation: true,
@@ -447,6 +446,10 @@ export interface GenerateCommitsParams {
 	hunkIndices: number[];
 	commits: ComposerCommit[];
 	baseCommit: ComposerBaseCommit | null;
+	commitsToReplace?: {
+		commits: { id: string; sha?: string; hunkIndices: number[] }[];
+		baseShaForNewDiff?: string;
+	};
 	customInstructions?: string;
 	isRecompose?: boolean;
 }
@@ -470,6 +473,7 @@ export interface ReloadComposerParams {
 
 export interface DidGenerateCommitsParams {
 	commits: ComposerCommit[];
+	replacedCommitIds?: string[];
 	hunks?: ComposerHunk[];
 }
 

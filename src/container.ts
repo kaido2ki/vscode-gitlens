@@ -17,7 +17,7 @@ import { setDefaultGravatarsStyle } from './avatars';
 import { CacheProvider } from './cache';
 import { GitCodeLensController } from './codelens/codeLensController';
 import type { ToggleFileAnnotationCommandArgs } from './commands/toggleFileAnnotations';
-import type { DateStyle, FileAnnotationType, Mode } from './config';
+import type { DateSource, DateStyle, FileAnnotationType, Mode } from './config';
 import { fromOutputLevel } from './config';
 import { extensionPrefix } from './constants';
 import type { GlCommands } from './constants.commands';
@@ -137,8 +137,8 @@ export class Container {
 
 	readonly CommitDateFormatting = {
 		dateFormat: null as string | null,
-		dateSource: 'authored',
-		dateStyle: 'relative',
+		dateSource: 'authored' as DateSource,
+		dateStyle: 'relative' as DateStyle,
 
 		reset: (): void => {
 			this.CommitDateFormatting.dateFormat = configuration.get('defaultDateFormat');
@@ -301,7 +301,7 @@ export class Container {
 		);
 
 		context.subscriptions.push({
-			dispose: () => this._disposables.reverse().forEach(d => void d.dispose()),
+			dispose: () => this._disposables.reverse().forEach(d => void d?.dispose()),
 		});
 
 		scheduleAddMissingCurrentWorkspaceRepos(this);
@@ -487,6 +487,10 @@ export class Container {
 	private readonly _eventBus: EventBus;
 	get events(): EventBus {
 		return this._eventBus;
+	}
+
+	get extensionMode(): ExtensionMode {
+		return this._context.extensionMode;
 	}
 
 	private readonly _fileAnnotationController: FileAnnotationController;
